@@ -1,0 +1,63 @@
+{
+  "unit": "USD per 1,000,000 tokens",
+  "note": "List prices, not a bill. Patterns are matched as prefixes against the model id; the longest matching pattern wins, so a dated or codenamed variant resolves to its family. An id that matches nothing is reported as unpriced with a null cost -- never silently zeroed.",
+  "fields": {
+    "input": "uncached input tokens",
+    "output": "output tokens, including reasoning/thinking tokens",
+    "cache_read": "Anthropic-style cache reads, billed as a separate bucket from input",
+    "cache_write": "Anthropic-style cache writes (5-minute TTL); 0 where the provider does not charge to populate a cache",
+    "cached_input": "OpenAI/Google-style cached input, which is a discounted SUBSET of input rather than a separate bucket"
+  },
+  "sources": {
+    "anthropic": "claude-api skill, cached 2026-06-24; cache read = 0.10x input, cache write = 1.25x input (5m TTL)",
+    "openai": "ESTIMATE -- public GPT-5-family list pricing carried forward to the 5.2-5.6 codenames, which have no published rate card",
+    "google": "ESTIMATE -- published Gemini 2.5 list pricing; Gemini 3 tiers are extrapolated",
+    "xai": "ESTIMATE -- published Grok 4 list pricing; the build codenames have no published rate card"
+  },
+  "models": [
+    {"pattern": "claude-fable-5", "input": 10.0, "output": 50.0, "cache_read": 1.0, "cache_write": 12.5, "cached_input": 1.0, "source": "anthropic"},
+    {"pattern": "claude-mythos-5", "input": 10.0, "output": 50.0, "cache_read": 1.0, "cache_write": 12.5, "cached_input": 1.0, "source": "anthropic"},
+    {"pattern": "claude-opus-5", "input": 5.0, "output": 25.0, "cache_read": 0.5, "cache_write": 6.25, "cached_input": 0.5, "source": "anthropic"},
+    {"pattern": "claude-opus", "input": 5.0, "output": 25.0, "cache_read": 0.5, "cache_write": 6.25, "cached_input": 0.5, "source": "anthropic"},
+    {"pattern": "claude-sonnet-5", "input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_write": 3.75, "cached_input": 0.3, "source": "anthropic"},
+    {"pattern": "claude-sonnet", "input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_write": 3.75, "cached_input": 0.3, "source": "anthropic"},
+    {"pattern": "claude-haiku-4-5", "input": 1.0, "output": 5.0, "cache_read": 0.1, "cache_write": 1.25, "cached_input": 0.1, "source": "anthropic"},
+    {"pattern": "claude-haiku", "input": 1.0, "output": 5.0, "cache_read": 0.1, "cache_write": 1.25, "cached_input": 0.1, "source": "anthropic"},
+    {"pattern": "claude-3-opus", "input": 15.0, "output": 75.0, "cache_read": 1.5, "cache_write": 18.75, "cached_input": 1.5, "source": "anthropic"},
+    {"pattern": "claude-3-5-sonnet", "input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_write": 3.75, "cached_input": 0.3, "source": "anthropic"},
+    {"pattern": "claude-3-7-sonnet", "input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_write": 3.75, "cached_input": 0.3, "source": "anthropic"},
+    {"pattern": "claude-3-5-haiku", "input": 0.8, "output": 4.0, "cache_read": 0.08, "cache_write": 1.0, "cached_input": 0.08, "source": "anthropic"},
+    {"pattern": "claude-3-haiku", "input": 0.25, "output": 1.25, "cache_read": 0.03, "cache_write": 0.3, "cached_input": 0.03, "source": "anthropic"},
+
+    {"pattern": "gpt-5", "input": 1.25, "output": 10.0, "cache_read": 0.125, "cache_write": 0.0, "cached_input": 0.125, "source": "openai"},
+    {"pattern": "gpt-5.2", "input": 1.25, "output": 10.0, "cache_read": 0.125, "cache_write": 0.0, "cached_input": 0.125, "source": "openai"},
+    {"pattern": "gpt-5.2-codex", "input": 1.25, "output": 10.0, "cache_read": 0.125, "cache_write": 0.0, "cached_input": 0.125, "source": "openai"},
+    {"pattern": "gpt-5.3-codex", "input": 1.25, "output": 10.0, "cache_read": 0.125, "cache_write": 0.0, "cached_input": 0.125, "source": "openai"},
+    {"pattern": "gpt-5.4", "input": 1.25, "output": 10.0, "cache_read": 0.125, "cache_write": 0.0, "cached_input": 0.125, "source": "openai"},
+    {"pattern": "gpt-5.5", "input": 1.25, "output": 10.0, "cache_read": 0.125, "cache_write": 0.0, "cached_input": 0.125, "source": "openai"},
+    {"pattern": "gpt-5.6-terra", "input": 1.25, "output": 10.0, "cache_read": 0.125, "cache_write": 0.0, "cached_input": 0.125, "source": "openai"},
+    {"pattern": "gpt-5.6-sol", "input": 1.25, "output": 10.0, "cache_read": 0.125, "cache_write": 0.0, "cached_input": 0.125, "source": "openai"},
+    {"pattern": "gpt-5.6-luna", "input": 1.25, "output": 10.0, "cache_read": 0.125, "cache_write": 0.0, "cached_input": 0.125, "source": "openai"},
+    {"pattern": "gpt-5-mini", "input": 0.25, "output": 2.0, "cache_read": 0.025, "cache_write": 0.0, "cached_input": 0.025, "source": "openai"},
+    {"pattern": "gpt-5.4-mini", "input": 0.25, "output": 2.0, "cache_read": 0.025, "cache_write": 0.0, "cached_input": 0.025, "source": "openai"},
+    {"pattern": "gpt-5.1-codex-mini", "input": 0.25, "output": 2.0, "cache_read": 0.025, "cache_write": 0.0, "cached_input": 0.025, "source": "openai"},
+    {"pattern": "gpt-5-nano", "input": 0.05, "output": 0.4, "cache_read": 0.005, "cache_write": 0.0, "cached_input": 0.005, "source": "openai"},
+    {"pattern": "codex-auto-review", "input": 1.25, "output": 10.0, "cache_read": 0.125, "cache_write": 0.0, "cached_input": 0.125, "source": "openai"},
+    {"pattern": "gpt-4.1-mini", "input": 0.4, "output": 1.6, "cache_read": 0.1, "cache_write": 0.0, "cached_input": 0.1, "source": "openai"},
+    {"pattern": "gpt-4.1", "input": 2.0, "output": 8.0, "cache_read": 0.5, "cache_write": 0.0, "cached_input": 0.5, "source": "openai"},
+    {"pattern": "gpt-4o-mini", "input": 0.15, "output": 0.6, "cache_read": 0.075, "cache_write": 0.0, "cached_input": 0.075, "source": "openai"},
+    {"pattern": "gpt-4o", "input": 2.5, "output": 10.0, "cache_read": 1.25, "cache_write": 0.0, "cached_input": 1.25, "source": "openai"},
+    {"pattern": "o4-mini", "input": 1.1, "output": 4.4, "cache_read": 0.275, "cache_write": 0.0, "cached_input": 0.275, "source": "openai"},
+    {"pattern": "o3", "input": 2.0, "output": 8.0, "cache_read": 0.5, "cache_write": 0.0, "cached_input": 0.5, "source": "openai"},
+
+    {"pattern": "gemini-2.5-pro", "input": 1.25, "output": 10.0, "cache_read": 0.3125, "cache_write": 0.0, "cached_input": 0.3125, "source": "google"},
+    {"pattern": "gemini-2.5-flash-lite", "input": 0.1, "output": 0.4, "cache_read": 0.025, "cache_write": 0.0, "cached_input": 0.025, "source": "google"},
+    {"pattern": "gemini-2.5-flash", "input": 0.3, "output": 2.5, "cache_read": 0.075, "cache_write": 0.0, "cached_input": 0.075, "source": "google"},
+    {"pattern": "gemini-2.0-flash", "input": 0.1, "output": 0.4, "cache_read": 0.025, "cache_write": 0.0, "cached_input": 0.025, "source": "google"},
+    {"pattern": "gemini-3-pro", "input": 2.0, "output": 12.0, "cache_read": 0.2, "cache_write": 0.0, "cached_input": 0.2, "source": "google"},
+    {"pattern": "gemini-3-flash", "input": 0.3, "output": 2.5, "cache_read": 0.075, "cache_write": 0.0, "cached_input": 0.075, "source": "google"},
+
+    {"pattern": "grok-4", "input": 3.0, "output": 15.0, "cache_read": 0.75, "cache_write": 0.0, "cached_input": 0.75, "source": "xai"},
+    {"pattern": "grok-code-fast", "input": 0.2, "output": 1.5, "cache_read": 0.02, "cache_write": 0.0, "cached_input": 0.02, "source": "xai"}
+  ]
+}

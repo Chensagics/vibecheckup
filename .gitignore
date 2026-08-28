@@ -1,0 +1,20 @@
+# Generated artifacts — these contain your real session vocabulary,
+# project names and local paths. Keep them out of git, especially if
+# this repo is ever made public.
+data/
+snapshots/
+dashboard.html
+
+# Internal design notes — they quantify the author's own AI usage
+# (file counts, corpus size, retention dates). Local only.
+docs/
+
+# Python
+__pycache__/
+*.pyc
+
+# Browser-automation leftovers
+.playwright-mcp/
+*.png
+# ...but README screenshots are real repo content
+!assets/*.png

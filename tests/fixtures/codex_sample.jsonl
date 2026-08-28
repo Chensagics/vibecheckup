@@ -1,0 +1,8 @@
+{"timestamp":"2026-08-02T09:00:00Z","type":"session_meta","payload":{"id":"c1","cwd":"/Users/x/Projects/demo"}}
+{"timestamp":"2026-08-02T09:00:01Z","type":"event_msg","payload":{"type":"user_message","message":"Profile the slow migration script"}}
+{"timestamp":"2026-08-02T09:00:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Profile the slow migration script PLUS INJECTED CONTEXT"}]}}
+{"timestamp":"2026-08-02T09:00:03Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"<skills_instructions>boilerplate</skills_instructions>"}]}}
+{"timestamp":"2026-08-02T09:00:04Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"The migration rebuilds the index on every row"}]}}
+{"timestamp":"2026-08-02T09:00:05Z","type":"response_item","payload":{"type":"function_call","name":"shell","call_id":"k1","arguments":"{\"command\":[\"bash\",\"-lc\",\"git log --oneline -5\"]}"}}
+{"timestamp":"2026-08-02T09:00:06Z","type":"response_item","payload":{"type":"function_call_output","call_id":"k1","output":[{"type":"input_text","text":"abc1234 fix index"}]}}
+{"timestamp":"2026-08-02T09:00:07Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":4242}}}}

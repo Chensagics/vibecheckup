@@ -1,0 +1,203 @@
+#!/usr/bin/env sh
+# vibecheck — one command from a fresh machine to an open dashboard.
+#
+#   From a checkout:   ./vibecheck.sh [--demo] [--tool X] [--limit N] [--no-open]
+#   One-liner:         curl -fsSL <raw-url>/vibecheck.sh | sh
+#
+# Reads the AI coding-session logs already on this machine, analyzes them, and
+# opens a single self-contained dashboard.html. Python 3 is the only
+# requirement; nothing is installed and nothing is uploaded. Re-running simply
+# refreshes. Local modes make no network calls at all -- the one exception is
+# the curl bootstrap below, which downloads this repo when there is no checkout.
+set -eu
+
+# Must match the public GitHub repo (owner/name) that serves this script.
+GH_REPO="${VIBECHECK_REPO:-chensagics/vibecheck}"
+GH_BRANCH="${VIBECHECK_BRANCH:-main}"
+PREFIX="${VIBECHECK_HOME:-$HOME/.vibecheck}"
+
+die() { printf 'vibecheck: %s\n' "$1" >&2; exit "${2:-1}"; }
+
+usage() {
+  cat <<'EOF'
+vibecheck — word clouds, spend and Agent Wrapped for your AI coding sessions.
+
+  ./vibecheck.sh                 ingest real logs, analyze, build, open
+  ./vibecheck.sh --demo          use a synthetic corpus instead (no real logs)
+
+Options:
+  --demo            generate a deterministic sample corpus via samples/generate.py
+  --force, -f       with --demo, overwrite data/events.ndjson without asking
+  --tool NAME       limit ingest to one source (repeatable):
+                    claude_code, codex, grok, gemini_cli, antigravity
+  --limit N         cap files per source (quick smoke run)
+  --no-open         build the dashboard but do not open a browser
+  -h, --help        this message
+
+Everything runs locally. Re-run any time to refresh.
+EOF
+}
+
+# --- python3 -----------------------------------------------------------------
+
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "vibecheck: python3 is required (3.8+) and was not found." >&2
+  if [ "$(uname -s)" = "Darwin" ]; then
+    echo "  On macOS, the Command Line Tools include it:" >&2
+    echo "      xcode-select --install" >&2
+    echo "  (or install from python.org / 'brew install python3')" >&2
+  else
+    echo "  Debian/Ubuntu:  sudo apt install python3" >&2
+    echo "  Fedora:         sudo dnf install python3" >&2
+    echo "  Arch:           sudo pacman -S python" >&2
+  fi
+  exit 1
+fi
+
+# --- locate the checkout, or fetch one ---------------------------------------
+
+# Answer --help before anything else, so `curl ... | sh -s -- --help` does not
+# download a repo just to print usage.
+for a in "$@"; do
+  case "$a" in -h|--help) usage; exit 0 ;; esac
+done
+
+SELF_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd || echo "")"
+
+fetch_repo() {
+  # curl | sh path: no checkout next to us, so download the tarball.
+  if [ "${VIBECHECK_BOOTSTRAPPED:-0}" = "1" ]; then
+    die "bootstrap ran twice — $PREFIX looks incomplete, remove it and retry"
+  fi
+  url="https://codeload.github.com/$GH_REPO/tar.gz/refs/heads/$GH_BRANCH"
+  printf 'vibecheck: no checkout here, fetching %s -> %s\n' "$GH_REPO" "$PREFIX"
+  command -v tar >/dev/null 2>&1 || die "tar is required to unpack the download"
+  mkdir -p "$PREFIX"
+  tgz="$PREFIX/.vibecheck-download.tar.gz"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$url" -o "$tgz" || die "download failed: $url"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "$tgz" "$url" || die "download failed: $url"
+  else
+    die "curl or wget is required to download $GH_REPO"
+  fi
+  tar -xzf "$tgz" -C "$PREFIX" --strip-components=1 || die "could not unpack $tgz"
+  rm -f "$tgz"
+  [ -f "$PREFIX/ingest.py" ] ||
+    die "the download did not contain ingest.py — check GH_REPO=$GH_REPO"
+}
+
+if [ -z "$SELF_DIR" ] || [ ! -f "$SELF_DIR/ingest.py" ]; then
+  fetch_repo
+  VIBECHECK_BOOTSTRAPPED=1
+  export VIBECHECK_BOOTSTRAPPED
+  exec sh "$PREFIX/vibecheck.sh" "$@"
+fi
+ROOT="$SELF_DIR"
+
+# --- arguments ---------------------------------------------------------------
+
+DEMO=0
+FORCE=0
+OPEN=1
+LIMIT=""
+TOOLS=""
+
+need_value() {
+  [ "$2" -gt 1 ] || die "$1 needs a value (see --help)" 2
+}
+
+add_tool() { # keep the value to a safe charset: it is re-parsed by eval below
+  case "$1" in
+    ""|*[!A-Za-z0-9_-]*) die "--tool wants a source name, got '$1'" 2 ;;
+  esac
+  TOOLS="$TOOLS --tool $1"
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --demo)     DEMO=1 ;;
+    --force|-f) FORCE=1 ;;
+    --no-open)  OPEN=0 ;;
+    --tool)     need_value --tool "$#"; shift; add_tool "$1" ;;
+    --tool=*)   add_tool "${1#--tool=}" ;;
+    --limit)    need_value --limit "$#"; shift; LIMIT="$1" ;;
+    --limit=*)  LIMIT="${1#--limit=}" ;;
+    -h|--help)  usage; exit 0 ;;
+    *)          printf 'vibecheck: unknown option %s\n\n' "$1" >&2
+                usage >&2; exit 2 ;;
+  esac
+  shift
+done
+
+case "$LIMIT" in
+  "") ;;
+  *[!0-9]*) die "--limit wants a whole number, got '$LIMIT'" 2 ;;
+esac
+
+EVENTS="$ROOT/data/events.ndjson"
+
+# --- stages ------------------------------------------------------------------
+
+stage() { # stage <label> <command...>
+  label="$1"; shift
+  printf '\n==> %s\n' "$label"
+  rc=0                      # not `status`: zsh reserves that name
+  "$@" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf '\nvibecheck: %s failed (exit %s).\n' "$label" "$rc" >&2
+    printf 'Nothing further was run — the output above shows what went wrong.\n' >&2
+    exit 1
+  fi
+}
+
+cd "$ROOT"
+mkdir -p "$ROOT/data"   # a fresh tarball has no data/ (it is gitignored)
+
+if [ "$DEMO" = "1" ]; then
+  if [ -f "$EVENTS" ] && [ "$FORCE" != "1" ]; then
+    printf 'vibecheck: %s already exists and --demo will replace it\n' "$EVENTS" >&2
+    printf '           with synthetic data (your real ingest is one re-run away).\n' >&2
+    if [ -t 0 ]; then
+      printf '           overwrite? [y/N] ' >&2
+      read -r answer || answer=""
+      case "$answer" in
+        y|Y|yes|YES) ;;
+        *) die "aborted — nothing was changed" ;;
+      esac
+    else
+      die "aborted — re-run with --force to overwrite"
+    fi
+  fi
+  stage "demo corpus (samples/generate.py)" \
+    python3 "$ROOT/samples/generate.py" "$EVENTS"
+else
+  # TOOLS holds "--tool a --tool b"; eval turns it back into separate words in
+  # every shell (plain $TOOLS would not split under zsh). add_tool has already
+  # restricted each value to [A-Za-z0-9_-], so there is nothing to inject.
+  eval "set -- $TOOLS"
+  if [ -n "$LIMIT" ]; then set -- "$@" --limit "$LIMIT"; fi
+  stage "ingest (session logs -> data/events.ndjson)" \
+    python3 "$ROOT/ingest.py" "$@"
+fi
+
+stage "analyze (events -> data/stats.json)" python3 "$ROOT/analyze.py"
+stage "build (stats + template -> dashboard.html)" python3 "$ROOT/build_dashboard.py"
+
+DASH="$ROOT/dashboard.html"
+[ -f "$DASH" ] || die "expected $DASH to exist after the build"
+
+printf '\n✓ vibecheck is ready: %s\n' "$DASH"
+
+if [ "$OPEN" = "1" ]; then
+  case "$(uname -s)" in
+    Darwin) open "$DASH" ;;
+    Linux)
+      if command -v xdg-open >/dev/null 2>&1; then
+        xdg-open "$DASH" >/dev/null 2>&1 &
+      else
+        printf '  (no xdg-open found — open the file above in a browser)\n'
+      fi ;;
+    *) printf '  (open the file above in a browser)\n' ;;
+  esac
+fi

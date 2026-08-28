@@ -1,0 +1,1925 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vibecheck</title>
+<style>
+:root{
+  color-scheme: light;
+  --page:#eceeea; --surface-1:#fcfcfb; --surface-2:#f4f5f2;
+  --ink:#0b0b0b; --ink-2:#52514e; --ink-3:#84837c;
+  --rule:#dcdcd6; --rule-strong:#c2c2ba;
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100; --s5:#e87ba4;
+  --seq-1:#cde2fb; --seq-2:#9ec5f4; --seq-3:#6da7ec; --seq-4:#3987e5;
+  --seq-5:#256abf; --seq-6:#184f95; --seq-7:#0d366b;
+  --focus:#2a78d6;
+  --display:'Bricolage Grotesque','Archivo',system-ui,sans-serif;
+  --body:'Inter Tight',system-ui,-apple-system,sans-serif;
+  --mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:where(:not([data-theme="light"])){
+    color-scheme: dark;
+    --page:#121211; --surface-1:#1a1a19; --surface-2:#212120;
+    --ink:#ffffff; --ink-2:#c3c2b7; --ink-3:#8d8c83;
+    --rule:#302f2d; --rule-strong:#454440;
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181;
+    --seq-1:#0d366b; --seq-2:#184f95; --seq-3:#256abf; --seq-4:#3987e5;
+    --seq-5:#6da7ec; --seq-6:#9ec5f4; --seq-7:#cde2fb;
+    --focus:#6da7ec;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --page:#121211; --surface-1:#1a1a19; --surface-2:#212120;
+  --ink:#ffffff; --ink-2:#c3c2b7; --ink-3:#8d8c83;
+  --rule:#302f2d; --rule-strong:#454440;
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181;
+  --seq-1:#0d366b; --seq-2:#184f95; --seq-3:#256abf; --seq-4:#3987e5;
+  --seq-5:#6da7ec; --seq-6:#9ec5f4; --seq-7:#cde2fb;
+  --focus:#6da7ec;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font-family:var(--body);
+  font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1240px;margin:0 auto;padding:0 20px 72px}
+
+/* ---- header ---- */
+header{padding:40px 0 20px}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--ink-3);margin:0 0 10px}
+h1{font-family:var(--display);font-weight:800;font-size:clamp(38px,6.5vw,68px);
+  line-height:.94;letter-spacing:-.035em;margin:0 0 14px}
+h1 em{font-style:normal;color:var(--ink-3)}
+.lede{max-width:60ch;color:var(--ink-2);margin:0 0 26px;font-size:16px}
+.stat-row{display:flex;flex-wrap:wrap;gap:0;border-top:1px solid var(--rule-strong);
+  border-bottom:1px solid var(--rule-strong)}
+.stat{padding:14px 22px 14px 0;margin-right:22px;border-right:1px solid var(--rule);
+  flex:0 0 auto}
+.stat:last-child{border-right:0}
+.stat b{display:block;font-family:var(--display);font-weight:600;font-size:26px;
+  letter-spacing:-.02em;line-height:1.1}
+.stat span{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--ink-3)}
+
+/* ---- coverage rail: the honest disclosure ---- */
+.rail{margin:26px 0 6px}
+.rail h2{font-family:var(--mono);font-size:11px;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--ink-3);font-weight:400;margin:0 0 10px}
+.rail-grid{display:grid;grid-template-columns:104px 1fr;gap:5px 12px;align-items:center}
+.rail-name{font-family:var(--mono);font-size:11.5px;color:var(--ink-2);
+  text-align:right;white-space:nowrap}
+.rail-track{position:relative;height:13px;background:var(--surface-2);
+  border-radius:2px;overflow:hidden}
+.rail-bar{position:absolute;top:0;bottom:0;border-radius:2px}
+.rail-axis{display:grid;grid-template-columns:104px 1fr;gap:12px;margin-top:7px}
+.rail-months{display:flex;justify-content:space-between;font-family:var(--mono);
+  font-size:9.5px;color:var(--ink-3)}
+.rail-note{font-size:12.5px;color:var(--ink-3);margin:12px 0 0;max-width:76ch}
+
+/* ---- tabs ---- */
+nav.tabs{position:sticky;top:0;z-index:20;background:var(--page);
+  border-bottom:1px solid var(--rule-strong);margin:30px 0 0;display:flex;
+  gap:2px;overflow-x:auto}
+nav.tabs button{appearance:none;background:none;border:0;border-bottom:2px solid transparent;
+  font-family:var(--mono);font-size:12px;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--ink-3);padding:13px 15px;cursor:pointer;white-space:nowrap}
+nav.tabs button:hover{color:var(--ink)}
+nav.tabs button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--ink)}
+nav.tabs button:focus-visible,.ctl select:focus-visible,.chip:focus-visible,
+.tgl:focus-visible,#themeBtn:focus-visible,.cw:focus-visible{outline:2px solid var(--focus);
+  outline-offset:2px;border-radius:2px}
+
+/* ---- controls ---- */
+.controls{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end;
+  padding:20px 0 18px;border-bottom:1px solid var(--rule)}
+.ctl{display:flex;flex-direction:column;gap:5px}
+.ctl label{font-family:var(--mono);font-size:10px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--ink-3)}
+.ctl select{font-family:var(--body);font-size:13.5px;color:var(--ink);
+  background:var(--surface-1);border:1px solid var(--rule-strong);border-radius:3px;
+  padding:7px 9px;min-width:150px}
+.tgl{font-family:var(--mono);font-size:11px;letter-spacing:.05em;background:var(--surface-1);
+  border:1px solid var(--rule-strong);color:var(--ink-2);border-radius:3px;
+  padding:8px 11px;cursor:pointer}
+.tgl[aria-pressed="true"]{background:var(--ink);color:var(--surface-1);border-color:var(--ink)}
+#themeBtn{position:absolute;top:40px;right:20px;background:var(--surface-1);
+  border:1px solid var(--rule-strong);color:var(--ink-2);border-radius:3px;
+  font-family:var(--mono);font-size:11px;padding:7px 11px;cursor:pointer}
+
+/* ---- panels / cards ---- */
+.view{display:none;padding-top:22px}
+.view.on{display:block}
+.card{background:var(--surface-1);border:1px solid var(--rule);border-radius:5px;
+  padding:20px 22px;margin-bottom:20px}
+.card>h3{font-family:var(--display);font-weight:600;font-size:19px;letter-spacing:-.015em;
+  margin:0 0 3px}
+.card>p.sub{color:var(--ink-3);font-size:12.5px;margin:0 0 16px}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:20px}
+.grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:20px}
+
+/* ---- the cloud ---- */
+.cloud{position:relative;width:100%;overflow:hidden;
+  background:var(--surface-1);border-radius:4px}
+.cw{position:absolute;font-family:var(--display);font-weight:600;letter-spacing:-.025em;
+  white-space:nowrap;cursor:default;transform:translate(-50%,-50%);
+  transition:opacity .12s ease}
+.cloud.dim .cw:not(:hover){opacity:.32}
+.cw b{font-weight:800}
+.cloud-empty{padding:38px;text-align:center;color:var(--ink-3);font-size:13.5px}
+
+/* ---- bars ---- */
+.bars{display:flex;flex-direction:column;gap:6px}
+.bar-row{display:grid;grid-template-columns:minmax(96px,auto) 1fr auto;gap:10px;
+  align-items:center;font-size:13px}
+.bar-lab{font-family:var(--mono);font-size:11.5px;color:var(--ink-2);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bar-track{background:var(--surface-2);border-radius:3px;height:15px;position:relative}
+.bar-fill{height:100%;border-radius:0 3px 3px 0;min-width:2px}
+.bar-val{font-family:var(--mono);font-size:11px;color:var(--ink-3);text-align:right;
+  min-width:52px}
+
+/* ---- heatmap + charts ---- */
+svg{display:block;max-width:100%}
+.hm-cell{stroke:var(--surface-1);stroke-width:2}
+.ax{font-family:var(--mono);font-size:10px;fill:var(--ink-3)}
+.gridline{stroke:var(--rule);stroke-width:1}
+.spark{fill:none;stroke:var(--s1);stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+
+/* ---- lists ---- */
+.termlist{list-style:none;margin:0;padding:0}
+.termlist li{display:grid;grid-template-columns:1fr auto auto;gap:10px;
+  padding:6px 0;border-bottom:1px solid var(--rule);align-items:baseline;font-size:13.5px}
+.termlist li:last-child{border-bottom:0}
+.termlist .t{font-family:var(--display);font-weight:600;letter-spacing:-.01em}
+.termlist .n{font-family:var(--mono);font-size:11px;color:var(--ink-3)}
+.termlist .d{font-family:var(--mono);font-size:11px;min-width:46px;text-align:right}
+.up{color:var(--s3)} .down{color:var(--s2)}
+
+/* ---- legend & badges ---- */
+.legend{display:flex;flex-wrap:wrap;gap:14px;margin:0 0 14px;padding:0;list-style:none}
+.legend li{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ink-2)}
+.swatch{width:11px;height:11px;border-radius:2px;flex:0 0 auto}
+.badge{display:inline-block;font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;
+  text-transform:uppercase;border:1px solid var(--rule-strong);color:var(--ink-3);
+  border-radius:2px;padding:2px 5px;margin-left:7px;vertical-align:2px}
+
+/* ---- tooltip ---- */
+#tip{position:fixed;z-index:60;pointer-events:none;opacity:0;transition:opacity .1s;
+  background:var(--ink);color:var(--page);font-family:var(--mono);font-size:11.5px;
+  padding:6px 9px;border-radius:3px;max-width:320px;line-height:1.45}
+#tip.on{opacity:1}
+.tip-t{font-weight:500}
+.tip-n{opacity:.72}
+
+.tablewrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{text-align:left;padding:7px 12px 7px 0;border-bottom:1px solid var(--rule);
+  white-space:nowrap}
+th{font-family:var(--mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--ink-3);font-weight:400}
+td.num{font-family:var(--mono);font-size:12px;text-align:right;padding-right:18px}
+footer{margin-top:44px;padding-top:18px;border-top:1px solid var(--rule);
+  font-family:var(--mono);font-size:11px;color:var(--ink-3);
+  display:flex;flex-wrap:wrap;gap:18px;justify-content:space-between}
+/* ---- spend ---- */
+.sp-caveat{margin:18px 0 0;padding:11px 13px;background:var(--surface-2);border-radius:4px;
+  border-left:2px solid var(--s4);font-size:12.5px;color:var(--ink-2);max-width:78ch}
+.sp-caveat b{font-weight:600;color:var(--ink)}
+.sp-mix{display:flex;height:20px;border-radius:3px;overflow:hidden;
+  border:1px solid var(--rule);margin:18px 0 12px}
+.sp-mix div{height:100%}
+.sp-row{display:grid;grid-template-columns:1fr auto;gap:4px 14px;align-items:baseline;
+  padding:10px 0;border-top:1px solid var(--rule)}
+.sp-row:first-child{border-top:0}
+.sp-name{font-family:var(--mono);font-size:12px;color:var(--ink);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sp-name em{font-style:normal;color:var(--ink-3);margin-left:7px}
+.sp-cost{font-family:var(--mono);font-size:12px;text-align:right;white-space:nowrap}
+.sp-cost i{font-style:normal;color:var(--ink-3);margin-left:8px}
+.sp-track{grid-column:1/-1;height:5px;border-radius:3px;background:var(--surface-2);
+  overflow:hidden;margin-top:1px}
+.sp-fill{height:100%;border-radius:3px;min-width:2px}
+.sp-detail{grid-column:1/-1;font-family:var(--mono);font-size:10.5px;color:var(--ink-3);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sp-foot{font-size:12.5px;color:var(--ink-3);margin:14px 0 0;max-width:78ch}
+.sp-empty{text-align:center;padding:46px 22px}
+.sp-empty h3{font-family:var(--display);font-weight:600;font-size:21px;
+  letter-spacing:-.015em;margin:0 0 10px}
+.sp-empty p{color:var(--ink-3);font-size:13.5px;margin:0 auto 8px;max-width:54ch}
+.sp-cursor{fill:var(--ink);opacity:.08}
+@media (max-width:640px){
+  /* Narrow enough that an ellipsis would eat the tool name and half the
+     token split: let both wrap instead of truncating. */
+  .sp-detail,.sp-name{white-space:normal;overflow-wrap:anywhere}
+  .sp-mix{height:16px}
+}
+/* ---- wrapped ---- */
+.wr-deck{position:relative;display:flex;flex-direction:column;overflow:hidden;
+  background:var(--surface-1);border:1px solid var(--rule);border-radius:6px;
+  height:calc(100vh - 116px);height:calc(100dvh - 116px);
+  min-height:470px;max-height:764px;
+  -webkit-user-select:none;user-select:none}
+.wr-deck:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.wr-prog{position:absolute;top:0;left:0;right:0;height:2px;z-index:2;
+  background:var(--surface-2)}
+.wr-prog i{display:block;height:100%;background:var(--ink);width:0;
+  transition:width .34s cubic-bezier(.22,.68,.24,1)}
+.wr-stage{position:relative;flex:1 1 auto;min-height:0;cursor:pointer}
+.wr-slide{position:absolute;inset:0;display:none;flex-direction:column;
+  align-items:center;justify-content:center;gap:14px;text-align:center;
+  padding:38px 26px 30px}
+.wr-slide.on{display:flex;animation:wr-in .42s cubic-bezier(.22,.68,.24,1) both}
+@keyframes wr-in{from{opacity:0;transform:translateY(18px)}}
+.wr-kicker{font-family:var(--mono);font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--ink-3);margin:0}
+.wr-big{font-family:var(--display);font-weight:800;letter-spacing:-.04em;
+  line-height:.88;margin:0;font-size:clamp(46px,12vw,128px);
+  max-width:100%;overflow-wrap:anywhere}
+.wr-mid{font-family:var(--display);font-weight:600;letter-spacing:-.03em;
+  line-height:1.05;margin:0;font-size:clamp(25px,4.2vw,44px);max-width:24ch;
+  color:var(--ink-2)}
+.wr-sub{color:var(--ink-2);font-size:15.5px;margin:0;max-width:46ch}
+.wr-fine{font-family:var(--mono);font-size:10.5px;line-height:1.6;color:var(--ink-3);
+  margin:0;max-width:58ch}
+.wr-emoji{font-size:clamp(40px,8vw,68px);line-height:1;margin:0}
+.wr-trio{display:flex;flex-wrap:wrap;justify-content:center;margin:2px 0}
+.wr-trio div{padding:2px 24px;border-right:1px solid var(--rule)}
+.wr-trio div:last-child{border-right:0}
+.wr-trio b{display:block;font-family:var(--display);font-weight:800;line-height:1.02;
+  font-size:clamp(32px,6.4vw,58px);letter-spacing:-.035em}
+.wr-trio span{font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--ink-3)}
+.wr-words{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:center;
+  gap:2px 22px;max-width:min(780px,94%)}
+.wr-words span{font-family:var(--display);font-weight:600;letter-spacing:-.03em;
+  line-height:1.05;white-space:nowrap}
+.wr-words i{font-family:var(--mono);font-style:normal;font-size:10.5px;
+  letter-spacing:0;color:var(--ink-3);margin-left:7px;vertical-align:middle}
+/* The share card: shown at its real 4:5 ratio, drawn at 1080x1350. */
+.wr-card{display:flex;flex-direction:column;align-items:center;gap:15px;
+  max-height:100%;min-height:0}
+.wr-canvas{display:block;width:auto;height:auto;max-width:100%;
+  max-height:min(56vh,462px);border-radius:5px;border:1px solid var(--rule);
+  box-shadow:0 10px 34px rgba(0,0,0,.13)}
+.wr-dl{appearance:none;border:0;border-radius:3px;cursor:pointer;
+  background:var(--ink);color:var(--page);font-family:var(--mono);font-size:12px;
+  letter-spacing:.07em;text-transform:uppercase;padding:11px 20px}
+.wr-dl:hover{opacity:.86}
+.wr-dl:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.wr-nav{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px;
+  padding:11px 14px;border-top:1px solid var(--rule);flex:0 0 auto}
+.wr-ctl{display:flex;align-items:center;gap:14px}
+.wr-arrow{appearance:none;background:none;border:1px solid var(--rule-strong);
+  color:var(--ink-2);border-radius:3px;width:30px;height:26px;padding:0;
+  cursor:pointer;font-family:var(--mono);font-size:13px;line-height:1}
+.wr-arrow:hover:not(:disabled){color:var(--ink);border-color:var(--ink)}
+.wr-arrow:disabled{opacity:.32;cursor:default}
+.wr-arrow:focus-visible,.wr-dot:focus-visible{outline:2px solid var(--focus);
+  outline-offset:2px}
+.wr-dots{display:flex;gap:2px;align-items:center}
+/* The dot is 7px; the button around it is a thumb-sized target. */
+.wr-dot{width:16px;height:16px;padding:0;border:0;background:none;cursor:pointer;
+  display:grid;place-items:center}
+.wr-dot::before{content:"";width:7px;height:7px;border-radius:50%;
+  background:var(--rule-strong);transition:background .2s,transform .2s}
+.wr-dot[aria-current="true"]::before{background:var(--ink);transform:scale(1.4)}
+.wr-hint,.wr-count{font-family:var(--mono);font-size:10px;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--ink-3)}
+.wr-count{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+@media (max-width:640px){
+  /* The tab bar wraps to two rows here, so the deck gets less of the viewport;
+     and a hint about arrow keys is meaningless on a phone. */
+  .wr-deck{height:calc(100dvh - 152px);max-height:none;min-height:420px}
+  .wr-slide{padding:24px 15px 20px;gap:11px}
+  .wr-trio div{padding:2px 13px}
+  .wr-words{gap:0 13px}
+  .wr-hint{display:none}
+  .wr-canvas{max-height:42vh}
+  .wr-nav{padding:10px;gap:6px}
+  .wr-ctl{gap:9px}
+  .wr-dot{width:14px}
+}
+
+@media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
+@media (max-width:640px){
+  #themeBtn{position:static;margin-bottom:16px}
+  .rail-grid,.rail-axis{grid-template-columns:74px 1fr}
+  .stat{padding-right:16px;margin-right:16px}
+  /* Nine month labels cannot fit a 390px track: show every other one. */
+  .rail-months span:nth-child(even){display:none}
+  /* Wrap the tabs rather than hiding the last one behind a silent scroll. */
+  nav.tabs{flex-wrap:wrap;overflow-x:visible}
+  nav.tabs button{padding:11px 11px;flex:1 1 auto}
+}
+</style>
+
+<button id="themeBtn" type="button">theme</button>
+<div class="wrap">
+<header>
+  <p class="eyebrow" id="eyebrow">—</p>
+  <h1>vibecheck<br><em>what I actually asked for</em></h1>
+  <p class="lede">Every local AI coding session on this machine, read end to end and
+    reduced to the words that were really typed — with the machine's own boilerplate
+    stripped out, so the clouds show vocabulary rather than scaffolding.</p>
+  <div class="stat-row" id="stats"></div>
+
+  <section class="rail">
+    <h2>Data coverage by tool</h2>
+    <div class="rail-grid" id="rail"></div>
+    <div class="rail-axis"><div></div><div class="rail-months" id="railMonths"></div></div>
+    <p class="rail-note" id="railNote"></p>
+  </section>
+</header>
+
+<nav class="tabs" role="tablist" id="tabs"></nav>
+
+<section class="view" id="v-wrapped" role="tabpanel"></section>
+<section class="view on" id="v-overview" role="tabpanel"></section>
+<section class="view" id="v-time" role="tabpanel"></section>
+<section class="view" id="v-tools" role="tabpanel"></section>
+<section class="view" id="v-projects" role="tabpanel"></section>
+<section class="view" id="v-activity" role="tabpanel"></section>
+<section class="view" id="v-spend" role="tabpanel"></section>
+
+<footer>
+  <span id="genline"></span>
+  <span>stdlib python → events.ndjson → stats.json → this page</span>
+</footer>
+</div>
+<div id="tip" role="status" aria-live="polite"></div>
+
+<script id="statsdata" type="application/json">__STATS__</script>
+<script>
+"use strict";
+const S = JSON.parse(document.getElementById('statsdata').textContent);
+// v2 adds the optional "spend" (and "wrapped") sections; v1 data still renders,
+// its Spend tab simply shows the empty state.
+const SCHEMA_OK = [1, 2];
+const TOOL_COLOR = {claude_code:'--s1', codex:'--s2', grok:'--s3',
+                    gemini_cli:'--s4', antigravity:'--s5'};
+const TOOL_LABEL = {claude_code:'Claude Code', codex:'Codex', grok:'Grok CLI',
+                    gemini_cli:'Gemini CLI', antigravity:'Antigravity'};
+const cssv = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const toolColor = t => cssv(TOOL_COLOR[t] || '--ink-3');
+const fmt = n => (n||0).toLocaleString('en-US');
+const el = (tag, cls, html) => { const e=document.createElement(tag);
+  if(cls) e.className=cls; if(html!=null) e.innerHTML=html; return e; };
+const esc = s => String(s).replace(/[&<>"]/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+/* ================= tooltip ================= */
+const tip = document.getElementById('tip');
+function showTip(e, title, note){
+  tip.innerHTML = `<span class="tip-t">${esc(title)}</span>` +
+                  (note ? `<br><span class="tip-n">${esc(note)}</span>` : '');
+  tip.classList.add('on');
+  const pad = 14, r = tip.getBoundingClientRect();
+  let x = e.clientX + pad, y = e.clientY + pad;
+  if (x + r.width > innerWidth - 8) x = e.clientX - r.width - pad;
+  if (y + r.height > innerHeight - 8) y = e.clientY - r.height - pad;
+  tip.style.left = x+'px'; tip.style.top = y+'px';
+}
+const hideTip = () => tip.classList.remove('on');
+function bindTip(node, title, note){
+  node.addEventListener('mousemove', e => showTip(e, title, note));
+  node.addEventListener('mouseleave', hideTip);
+}
+
+/* ================= word cloud ================= */
+const measure = (()=> {
+  const c = document.createElement('canvas').getContext('2d');
+  return (text, size, weight) => {
+    c.font = `${weight} ${size}px ${cssv('--display')||'sans-serif'}`;
+    return c.measureText(text).width;
+  };
+})();
+
+function layoutCloud(container, items, opts){
+  opts = opts || {};
+  container.innerHTML = '';
+  container.classList.remove('dim');
+  if (!items || !items.length){
+    container.style.height = 'auto';
+    container.appendChild(el('div','cloud-empty',
+      opts.emptyMsg || 'No terms for this selection.'));
+    return;
+  }
+  const W = container.clientWidth || 800;
+  const H = opts.height || Math.max(300, Math.round(W * 0.52));
+  container.style.height = H + 'px';
+
+  const max = items[0].w, min = items[items.length-1].w;
+  const maxPx = Math.min(opts.maxPx || 74, Math.max(30, W/9));
+  const minPx = opts.minPx || 12;
+  const scale = v => {
+    if (max === min) return (maxPx+minPx)/2;
+    const t = (Math.sqrt(v) - Math.sqrt(min)) / (Math.sqrt(max) - Math.sqrt(min));
+    return minPx + t * (maxPx - minPx);
+  };
+
+  const placed = [];
+  const cx = W/2, cy = H/2;
+  const hits = (a) => placed.some(b =>
+    !(a.x2 < b.x1 || a.x1 > b.x2 || a.y2 < b.y1 || a.y1 > b.y2));
+
+  let shown = 0;
+  items.forEach((it, i) => {
+    const size = scale(it.w);
+    const weight = i < 3 ? 800 : 600;
+    const w = measure(it.t, size, weight) + 12;
+    const hPack = size * 1.08 + 3;   // neighbour spacing
+    const hWall = size * 1.30;       // true glyph extent, for the boundary only
+    // Archimedean spiral outward from the centre until a free box appears.
+    let px=null, py=null;
+    for (let a = 0; a < 900; a += 0.2){
+      const rad = 2.6 * a;
+      const x = cx + rad * Math.cos(a) * 1.35;
+      const y = cy + rad * Math.sin(a) * 0.72;
+      if (x - w/2 < 5 || x + w/2 > W-5 ||
+          y - hWall/2 < 4 || y + hWall/2 > H-4) continue;
+      const box = {x1:x-w/2, x2:x+w/2, y1:y-hPack/2, y2:y+hPack/2};
+      if (!hits(box)){ placed.push(box); px=x; py=y; break; }
+    }
+    if (px === null) return;
+    shown++;
+    const span = el('span','cw');
+    span.textContent = it.t;
+    span.style.left = px+'px'; span.style.top = py+'px';
+    span.style.fontSize = size+'px'; span.style.fontWeight = weight;
+    span.style.color = it.color || (i < 12 ? cssv('--ink') : cssv('--ink-2'));
+    span.tabIndex = 0;
+    span.setAttribute('role','listitem');
+    span.setAttribute('aria-label', `${it.t}, ${it.note || fmt(it.w)}`);
+    bindTip(span, it.t, it.note || `${fmt(it.w)} uses`);
+    span.addEventListener('focus', () => container.classList.add('dim'));
+    span.addEventListener('blur', () => container.classList.remove('dim'));
+    container.appendChild(span);
+  });
+  container.setAttribute('role','list');
+  container.dataset.shown = shown;
+}
+
+/* ================= bars ================= */
+function bars(items, opts){
+  opts = opts || {};
+  const box = el('div','bars');
+  if (!items || !items.length){
+    box.appendChild(el('div','cloud-empty','Nothing recorded here.'));
+    return box;
+  }
+  const max = Math.max(...items.map(d => d.n)) || 1;
+  items.forEach(d => {
+    const row = el('div','bar-row');
+    row.appendChild(el('div','bar-lab', esc(d.t)));
+    const track = el('div','bar-track');
+    const fill = el('div','bar-fill');
+    fill.style.width = Math.max(2, (d.n/max)*100) + '%';
+    fill.style.background = d.color || cssv('--s1');
+    track.appendChild(fill);
+    row.appendChild(track);
+    row.appendChild(el('div','bar-val', fmt(d.n)));
+    bindTip(row, d.t, d.note || `${fmt(d.n)}`);
+    box.appendChild(row);
+  });
+  return box;
+}
+
+/* ================= header ================= */
+function renderHeader(){
+  const t = S.totals, cov = S.coverage;
+  const months = Object.keys(S.clouds.by_month).sort();
+  document.getElementById('eyebrow').textContent =
+    `${Object.keys(cov).length} tools · ${months[0]} – ${months[months.length-1]}`;
+  const stats = document.getElementById('stats');
+  [['Sessions', t.sessions], ['Events read', t.events], ['Prompts', t.prompts],
+   ['Words of prose', t.words], ['Projects', t.projects]]
+    .forEach(([k,v]) => {
+      const s = el('div','stat');
+      s.appendChild(el('b', null, fmt(v)));
+      s.appendChild(el('span', null, k));
+      stats.appendChild(s);
+    });
+  document.getElementById('genline').textContent =
+    `generated ${S.generated_at} · ${fmt(S.source_events)} events`;
+
+  // Coverage rail: months are the shared axis, so gaps are visible.
+  const rail = document.getElementById('rail');
+  const idx = Object.fromEntries(months.map((m,i)=>[m,i]));
+  Object.entries(cov).forEach(([tool, c]) => {
+    rail.appendChild(el('div','rail-name', TOOL_LABEL[tool]||tool));
+    const track = el('div','rail-track');
+    const present = Object.keys(c.months||{}).filter(m => m in idx).sort();
+    present.forEach(m => {
+      const b = el('div','rail-bar');
+      b.style.left = (idx[m]/months.length*100)+'%';
+      b.style.width = (1/months.length*100)+'%';
+      b.style.background = toolColor(tool);
+      b.style.opacity = 0.35 + 0.65*Math.min(1, (c.months[m]||0)/3000);
+      bindTip(b, `${TOOL_LABEL[tool]||tool} · ${m}`, `${fmt(c.months[m])} events`);
+      track.appendChild(b);
+    });
+    rail.appendChild(track);
+  });
+  const rm = document.getElementById('railMonths');
+  months.forEach(m => rm.appendChild(el('span',null,m.slice(2))));
+  const spans = Object.entries(cov).map(([k,c]) =>
+    `${TOOL_LABEL[k]||k} ${String(c.first).slice(0,7)}→${String(c.last).slice(0,7)}`);
+  document.getElementById('railNote').textContent =
+    'Retention differs per tool, so a term that "rises" may just be a log window opening. ' +
+    'Month rates are computed within each tool before comparison. ' + spans.join(' · ') + '.';
+}
+
+/* ================= views ================= */
+const VOCABS = [
+  ['prose_user','My prompts'], ['prose_assistant','Assistant replies'],
+  ['phrases_user','My phrases'], ['phrases_assistant','Assistant phrases'],
+  ['tools','Tools used'], ['commands','Shell commands'],
+  ['extensions','File types'], ['errors','Errors']
+];
+
+function pickCloud(bucket, vocab, ranking, collapsed){
+  if (!bucket) return [];
+  if (ranking === 'distinctive'){
+    const key = vocab === 'prose_assistant' ? 'distinctive_assistant' : 'distinctive_user';
+    return (bucket[key]||[]).map(d => ({t:d.t, w:Math.max(d.z,0.01), n:d.n,
+      note:`z ${d.z} · ${fmt(d.n)} uses`}));
+  }
+  let src = bucket[vocab] || [];
+  if (vocab === 'prose_user' && !collapsed) src = bucket.prose_user_raw || src;
+  return src.map(d => ({t:d.t, w:d.n, n:d.n,
+    note:d.pmi != null ? `${fmt(d.n)} uses · PMI ${d.pmi}` : `${fmt(d.n)} uses`}));
+}
+
+const CTL_STATE = {};
+function ctlState(view, defaults){
+  // Survives the full re-render a theme change triggers.
+  if (!CTL_STATE[view]) CTL_STATE[view] = defaults;
+  return CTL_STATE[view];
+}
+function controlBar(view, cfg, onChange){
+  const c = el('div','controls');
+  cfg.forEach(f => {
+    if (f.type === 'toggle'){
+      const b = el('button','tgl', f.label);
+      b.type='button'; b.setAttribute('aria-pressed', String(f.value));
+      b.addEventListener('click', () => { f.value=!f.value;
+        b.setAttribute('aria-pressed', String(f.value)); onChange(); });
+      c.appendChild(b);
+      return;
+    }
+    const w = el('div','ctl');
+    const id = view + '-' + f.key;
+    const lab = el('label', null, f.label); lab.setAttribute('for', id);
+    const sel = el('select'); sel.id = id;
+    f.options.forEach(([v,t]) => {
+      const o=el('option',null,t); o.value=v; if(v===f.value) o.selected=true;
+      sel.appendChild(o);
+    });
+    sel.addEventListener('change', () => { f.value = sel.value; onChange(); });
+    w.appendChild(lab); w.appendChild(sel); c.appendChild(w);
+  });
+  return c;
+}
+
+function renderOverview(){
+  const root = document.getElementById('v-overview');
+  root.innerHTML = '';
+  const sources = [['all','All tools']].concat(
+    Object.keys(S.clouds.by_tool).map(t => [t, TOOL_LABEL[t]||t]));
+  const state = ctlState('overview', [
+    {key:'source', label:'Source', value:'all', options:sources},
+    {key:'vocab', label:'Vocabulary', value:'prose_user', options:VOCABS},
+    {key:'rank', label:'Ranking', value:'frequency',
+     options:[['frequency','Most frequent'],['distinctive','Most distinctive']]},
+    {type:'toggle', key:'collapsed', label:'collapse repeats', value:true}
+  ]);
+  const card = el('div','card');
+  const head = el('div');
+  head.appendChild(el('h3', null, 'The headline cloud'));
+  const sub = el('p','sub'); card.appendChild(head); card.appendChild(sub);
+  const cloud = el('div','cloud');
+  const note = el('p','sub');
+
+  function draw(){
+    const src = state[0].value, vocab = state[1].value;
+    const rank = state[2].value, collapsed = state[3].value;
+    const bucket = src === 'all' ? S.clouds.global : S.clouds.by_tool[src];
+    let items, msg = '';
+    if (rank === 'distinctive' && src === 'all'){
+      items = [];
+      msg = 'Distinctiveness compares one source against the rest, so it needs a single tool selected.';
+    } else {
+      items = pickCloud(bucket, vocab, rank, collapsed);
+      if (src !== 'all') items.forEach(i => i.color = toolColor(src));
+    }
+    sub.textContent = rank === 'distinctive'
+      ? 'Terms this source uses far more than every other source, by log-odds with a Dirichlet prior.'
+      : (vocab === 'prose_user' && !collapsed
+         ? 'Every occurrence counted, including near-identical automation prompts.'
+         : 'Near-duplicate prompts counted once, so loop automation cannot dominate.');
+    const attempted = items.slice(0,220);
+    layoutCloud(cloud, attempted, {emptyMsg: msg});
+    note.textContent = attempted.length
+      ? `${cloud.dataset.shown} of ${attempted.length} terms placed`
+        + (items.length > attempted.length ? ` (top ${attempted.length} of ${items.length})` : '')
+        + ` · ${fmt(bucket.counts.prompts)} prompts, ${fmt(bucket.counts.sessions)} sessions in this slice`
+      : '';
+  }
+  card.insertBefore(controlBar('overview', state, draw), sub.nextSibling);
+  card.appendChild(cloud); card.appendChild(note);
+  root.appendChild(card);
+
+  const g = S.clouds.global;
+  const row = el('div','grid3');
+  [['Tools reached for', g.tools, '--s1'],
+   ['Shell commands', g.commands, '--s2'],
+   ['File types touched', g.extensions, '--s3']].forEach(([title, data, col]) => {
+    const c = el('div','card');
+    c.appendChild(el('h3', null, title));
+    c.appendChild(el('p','sub', `top ${Math.min(12, data.length)} of ${fmt(data.length)}`));
+    c.appendChild(bars(data.slice(0,12).map(d => ({...d, color: cssv(col)}))));
+    row.appendChild(c);
+  });
+  root.appendChild(row);
+
+  const ec = el('div','card');
+  ec.appendChild(el('h3', null, 'What went wrong most'));
+  ec.appendChild(el('p','sub','Failure signatures with paths, numbers and hashes masked so they group.'));
+  ec.appendChild(bars(g.errors.slice(0,10).map(d =>
+    ({t:d.t.length>78? d.t.slice(0,78)+'…' : d.t, n:d.n, note:d.t, color:cssv('--s2')}))));
+  root.appendChild(ec);
+  requestAnimationFrame(draw);
+}
+
+function renderTime(){
+  const root = document.getElementById('v-time'); root.innerHTML = '';
+  const months = Object.keys(S.clouds.by_month).sort();
+  const state = ctlState('time', [
+    {key:'month', label:'Month', value:months[months.length-1],
+     options:months.map(m=>[m,m])},
+    {key:'vocab', label:'Vocabulary', value:'prose_user', options:VOCABS}
+  ]);
+  const card = el('div','card');
+  card.appendChild(el('h3', null, 'Vocabulary by month'));
+  const sub = el('p','sub'); card.appendChild(sub);
+  const cloud = el('div','cloud');
+  function draw(){
+    const b = S.clouds.by_month[state[0].value];
+    layoutCloud(cloud, pickCloud(b, state[1].value, 'frequency', true).slice(0,160),
+      {height: 340});
+    sub.textContent = `${fmt(b.counts.prompts)} prompts · ${fmt(b.counts.sessions)} sessions · ${fmt(b.counts.events)} events in ${state[0].value}`;
+  }
+  card.insertBefore(controlBar('time', state, draw), sub.nextSibling);
+  card.appendChild(cloud); root.appendChild(card);
+
+  const tr = S.trends;
+  const pair = el('div','grid2');
+  [['Rising', tr.rising, 'up'], ['Fading', tr.fading, 'down']].forEach(([title, data, cls]) => {
+    const c = el('div','card');
+    c.appendChild(el('h3', null, title));
+    c.appendChild(el('p','sub', title === 'Rising'
+      ? `More common in ${(tr.late_months||[]).join(', ')} than before`
+      : `Common in ${(tr.early_months||[]).join(', ')}, since faded`));
+    const ul = el('ul','termlist');
+    data.slice(0,18).forEach(d => {
+      const li = el('li');
+      li.appendChild(el('span','t', esc(d.t)));
+      li.appendChild(el('span','n', `${fmt(d.n)} uses`));
+      li.appendChild(el('span','d '+cls, (d.lift>0?'+':'')+d.lift.toFixed(1)+'×'));
+      bindTip(li, d.t, `rate ${d.early}→${d.late} per 100k words`);
+      ul.appendChild(li);
+    });
+    c.appendChild(ul); pair.appendChild(c);
+  });
+  root.appendChild(pair);
+  requestAnimationFrame(draw);
+}
+
+function renderTools(){
+  const root = document.getElementById('v-tools'); root.innerHTML = '';
+  const legend = el('ul','legend');
+  Object.keys(S.clouds.by_tool).forEach(t => {
+    const li = el('li');
+    const sw = el('span','swatch'); sw.style.background = toolColor(t);
+    li.appendChild(sw); li.appendChild(el('span', null, TOOL_LABEL[t]||t));
+    legend.appendChild(li);
+  });
+  const head = el('div','card');
+  head.appendChild(el('h3', null, 'How I talk to each tool'));
+  head.appendChild(el('p','sub',
+    'Terms each tool gets far more than the others, by log-odds against the whole corpus. Every series is directly labelled.'));
+  head.appendChild(legend);
+  root.appendChild(head);
+
+  const grid = el('div','grid2');
+  Object.entries(S.clouds.by_tool).forEach(([tool, b]) => {
+    const c = el('div','card');
+    const h = el('h3', null, esc(TOOL_LABEL[tool]||tool));
+    if (S.coverage[tool] && S.coverage[tool].heuristic_events > 0)
+      h.appendChild(el('span','badge','heuristic source'));
+    c.appendChild(h);
+    c.appendChild(el('p','sub',
+      `${fmt(b.counts.sessions)} sessions · ${fmt(b.counts.prompts)} prompts · ${fmt(b.counts.words)} words`));
+    const cl = el('div','cloud'); c.appendChild(cl);
+    grid.appendChild(c);
+    requestAnimationFrame(() => layoutCloud(cl,
+      (b.distinctive_user||[]).slice(0,60).map(d =>
+        ({t:d.t, w:Math.max(d.z,0.01), note:`z ${d.z} · ${fmt(d.n)} uses`,
+          color: toolColor(tool)})), {height:250, maxPx:44}));
+  });
+  root.appendChild(grid);
+
+  const cmp = el('div','card');
+  cmp.appendChild(el('h3', null, 'Tool usage side by side'));
+  cmp.appendChild(el('p','sub','Sessions recorded per tool. Bars are labelled with their exact counts.'));
+  cmp.appendChild(bars(Object.entries(S.activity.sessions_by_tool)
+    .sort((a,b)=>b[1]-a[1])
+    .map(([t,n]) => ({t:TOOL_LABEL[t]||t, n, color:toolColor(t)}))));
+  root.appendChild(cmp);
+}
+
+function renderProjects(){
+  const root = document.getElementById('v-projects'); root.innerHTML='';
+  const head = el('div','card');
+  head.appendChild(el('h3',null,'What each repo was really about'));
+  head.appendChild(el('p','sub',
+    'Distinctive terms per project, against the whole corpus. Busiest 24 repos by prompt count.'));
+  root.appendChild(head);
+  const grid = el('div','grid3');
+  Object.entries(S.clouds.by_project).forEach(([proj, b]) => {
+    if (!b.distinctive_user || !b.distinctive_user.length) return;
+    const c = el('div','card');
+    c.appendChild(el('h3', null, esc(proj)));
+    c.appendChild(el('p','sub', `${fmt(b.counts.prompts)} prompts · ${fmt(b.counts.sessions)} sessions`));
+    const cl = el('div','cloud'); c.appendChild(cl);
+    grid.appendChild(c);
+    requestAnimationFrame(() => layoutCloud(cl,
+      b.distinctive_user.slice(0,40).map(d =>
+        ({t:d.t, w:Math.max(d.z,0.01), note:`z ${d.z} · ${fmt(d.n)} uses`})),
+      {height:200, maxPx:34}));
+  });
+  root.appendChild(grid);
+}
+
+function renderActivity(){
+  const root = document.getElementById('v-activity'); root.innerHTML='';
+  const A = S.activity;
+
+  // --- prompts per day
+  const days = Object.keys(A.per_day).sort();
+  const c1 = el('div','card');
+  c1.appendChild(el('h3',null,'Prompts per day'));
+  c1.appendChild(el('p','sub','One line, one measure — hover for the exact day.'));
+  if (days.length > 1){
+    const W=940, H=190, P={l:38,r:12,t:12,b:26};
+    const max = Math.max(...days.map(d=>A.per_day[d]));
+    const x = i => P.l + i*(W-P.l-P.r)/Math.max(1,days.length-1);
+    const y = v => H-P.b - (v/max)*(H-P.t-P.b);
+    const ns='http://www.w3.org/2000/svg';
+    const svg=document.createElementNS(ns,'svg');
+    svg.setAttribute('viewBox',`0 0 ${W} ${H}`); svg.setAttribute('width','100%');
+    svg.setAttribute('role','img');
+    svg.setAttribute('aria-label',`Prompts per day from ${days[0]} to ${days[days.length-1]}, peak ${max}`);
+    [0,.5,1].forEach(f=>{
+      const ln=document.createElementNS(ns,'line');
+      ln.setAttribute('x1',P.l); ln.setAttribute('x2',W-P.r);
+      ln.setAttribute('y1',y(max*f)); ln.setAttribute('y2',y(max*f));
+      ln.setAttribute('class','gridline'); svg.appendChild(ln);
+      const tx=document.createElementNS(ns,'text');
+      tx.setAttribute('x',P.l-7); tx.setAttribute('y',y(max*f)+3);
+      tx.setAttribute('text-anchor','end'); tx.setAttribute('class','ax');
+      tx.textContent=Math.round(max*f); svg.appendChild(tx);
+    });
+    const path=document.createElementNS(ns,'path');
+    path.setAttribute('d', days.map((d,i)=>`${i?'L':'M'}${x(i).toFixed(1)},${y(A.per_day[d]).toFixed(1)}`).join(' '));
+    path.setAttribute('class','spark'); path.setAttribute('stroke',cssv('--s1'));
+    svg.appendChild(path);
+    days.forEach((d,i)=>{
+      const hit=document.createElementNS(ns,'rect');
+      hit.setAttribute('x',x(i)-3); hit.setAttribute('y',P.t);
+      hit.setAttribute('width',6); hit.setAttribute('height',H-P.t-P.b);
+      hit.setAttribute('fill','transparent');
+      hit.addEventListener('mousemove',e=>showTip(e,d,`${A.per_day[d]} prompts`));
+      hit.addEventListener('mouseleave',hideTip);
+      svg.appendChild(hit);
+    });
+    [days[0], days[days.length-1]].forEach((d,i)=>{
+      const tx=document.createElementNS(ns,'text');
+      tx.setAttribute('x', i? W-P.r : P.l); tx.setAttribute('y',H-8);
+      tx.setAttribute('text-anchor', i?'end':'start');
+      tx.setAttribute('class','ax'); tx.textContent=d; svg.appendChild(tx);
+    });
+    c1.appendChild(svg);
+  }
+  root.appendChild(c1);
+
+  // --- hour heatmap (sequential, single hue)
+  const c2 = el('div','card');
+  c2.appendChild(el('h3',null,'When I work'));
+  c2.appendChild(el('p','sub','Prompts by hour of day. One hue, light to dark — darker means more.'));
+  const hours = Array.from({length:24},(_,h)=>A.hour_histogram[String(h)]||0);
+  const hmax = Math.max(...hours,1);
+  const ramp = ['--seq-1','--seq-2','--seq-3','--seq-4','--seq-5','--seq-6','--seq-7'];
+  const ns='http://www.w3.org/2000/svg';
+  const hs=document.createElementNS(ns,'svg');
+  hs.setAttribute('viewBox','0 0 960 96'); hs.setAttribute('width','100%');
+  hs.setAttribute('role','img');
+  hs.setAttribute('aria-label','Prompts by hour of day, peak at hour '+hours.indexOf(hmax));
+  hours.forEach((v,h)=>{
+    const step = v===0 ? 0 : Math.min(ramp.length-1, Math.floor(v/hmax*(ramp.length-1)+0.5));
+    const r=document.createElementNS(ns,'rect');
+    r.setAttribute('x',h*40); r.setAttribute('y',0);
+    r.setAttribute('width',40); r.setAttribute('height',52);
+    r.setAttribute('rx',3); r.setAttribute('class','hm-cell');
+    r.setAttribute('fill', v===0 ? cssv('--surface-2') : cssv(ramp[step]));
+    r.addEventListener('mousemove',e=>showTip(e,`${String(h).padStart(2,'0')}:00`,`${fmt(v)} prompts`));
+    r.addEventListener('mouseleave',hideTip);
+    hs.appendChild(r);
+    if (h%3===0){
+      const tx=document.createElementNS(ns,'text');
+      tx.setAttribute('x',h*40+20); tx.setAttribute('y',70);
+      tx.setAttribute('text-anchor','middle'); tx.setAttribute('class','ax');
+      tx.textContent=String(h).padStart(2,'0'); hs.appendChild(tx);
+    }
+  });
+  c2.appendChild(hs);
+  root.appendChild(c2);
+
+  const c3 = el('div','card');
+  c3.appendChild(el('h3',null,'Days of the week'));
+  c3.appendChild(el('p','sub','Prompts by weekday.'));
+  c3.appendChild(bars(Object.entries(A.weekday_histogram)
+    .map(([t,n])=>({t,n,color:cssv('--s1')}))));
+  root.appendChild(c3);
+
+  const c4 = el('div','card');
+  c4.appendChild(el('h3',null,'Busiest projects'));
+  c4.appendChild(el('p','sub','By prompts typed. The table carries the exact numbers.'));
+  const tw = el('div','tablewrap');
+  const tb = el('table');
+  tb.innerHTML = '<thead><tr><th>Project</th><th>Prompts</th><th>Sessions</th>'+
+    '<th>Events</th><th>Tools</th></tr></thead>';
+  const tbody = el('tbody');
+  A.top_projects.slice(0,20).forEach(p => {
+    const tr = el('tr');
+    tr.innerHTML = `<td>${esc(p.t)}</td><td class="num">${fmt(p.n)}</td>`+
+      `<td class="num">${fmt(p.sessions)}</td><td class="num">${fmt(p.events)}</td>`+
+      `<td>${Object.keys(p.tools).map(t=>esc(TOOL_LABEL[t]||t)).join(', ')}</td>`;
+    tbody.appendChild(tr);
+  });
+  tb.appendChild(tbody); tw.appendChild(tb); c4.appendChild(tw);
+  root.appendChild(c4);
+}
+
+/* ================= spend =================
+   Everything here reads S.spend and nothing else. The section is optional:
+   a stats.json without it (or with an all-zero one) renders an empty state
+   rather than a wall of $0.00. Costs are list-price estimates, and the tab
+   says so out loud. */
+const spUsd = n => '$' + (Number(n)||0).toLocaleString('en-US',
+  {minimumFractionDigits:2, maximumFractionDigits:2});
+const spTok = n => {
+  n = Number(n)||0;
+  if (n >= 1e9) return (n/1e9).toFixed(2)+'B';
+  if (n >= 1e6) return (n/1e6).toFixed(1)+'M';
+  if (n >= 1e3) return (n/1e3).toFixed(1)+'K';
+  return String(Math.round(n));
+};
+const spPct = f => {
+  f = Number(f)||0;
+  if (f > 1) f = f/100;              // tolerate a 0-100 rate as well as 0-1
+  return (f*100).toFixed(f > 0 && f < 0.01 ? 1 : 0) + '%';
+};
+const spAnd = xs => xs.length < 2 ? (xs[0]||'')
+  : xs.slice(0,-1).join(', ') + ' and ' + xs[xs.length-1];
+
+/* by_day may be sparse; a day axis with holes in it lies about the shape of
+   the spend, so fill the gaps with zeros before drawing. */
+function spDays(byDay){
+  const map = {};
+  (byDay||[]).forEach(d => {
+    const k = d && d.date;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(k))) return;
+    if (!map[k]) map[k] = {date:k, cost:0, tokens:0};
+    map[k].cost += Number(d.cost)||0;
+    map[k].tokens += Number(d.tokens)||0;
+  });
+  const keys = Object.keys(map).sort();
+  if (!keys.length) return [];
+  const t0 = Date.parse(keys[0]+'T00:00:00Z');
+  const t1 = Date.parse(keys[keys.length-1]+'T00:00:00Z');
+  const n = Math.round((t1-t0)/864e5) + 1;
+  if (!isFinite(n) || n < 1 || n > 2000) return keys.map(k => map[k]);
+  const out = [];
+  for (let i = 0; i < n; i++){
+    const iso = new Date(t0 + i*864e5).toISOString().slice(0,10);
+    out.push(map[iso] || {date:iso, cost:0, tokens:0});
+  }
+  return out;
+}
+
+/* Cost per day. Drawn at real pixel width — a 940-unit viewBox squeezed into
+   390px would shrink the axis type to three pixels. */
+function spChart(holder, days){
+  holder.innerHTML = '';
+  if (!days.length) return;
+  const W = Math.max(240, Math.round(holder.clientWidth || 640));
+  const narrow = W < 460;
+  const H = narrow ? 150 : 210;
+  const P = {l: narrow ? 42 : 50, r: 8, t: 12, b: 24};
+  const iw = W - P.l - P.r, ih = H - P.t - P.b;
+  const max = Math.max(...days.map(d => d.cost||0), 0.01);
+  const slot = iw/days.length;
+  const gap = slot > 6 ? Math.min(3, slot*0.22) : (slot > 2 ? 0.6 : 0);
+  const bw = Math.max(0.8, slot - gap);
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns,'svg');
+  const mk = (t, at, txt) => { const e = document.createElementNS(ns,t);
+    for (const k in at) e.setAttribute(k, at[k]);
+    if (txt != null) e.textContent = txt; svg.appendChild(e); return e; };
+  // One format for the whole axis, chosen from the peak — "$1k" stacked above
+  // "$527" reads as two different units.
+  const unit = max >= 10000 ? (v => '$'+Math.round(v/1000)+'k')
+    : max >= 10 ? (v => '$'+Math.round(v)) : (v => '$'+v.toFixed(2));
+  const axCost = v => v > 0 ? unit(v) : '$0';
+
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('width', W); svg.setAttribute('height', H);
+  svg.setAttribute('role','img');
+  svg.setAttribute('aria-label',
+    `Cost per day from ${days[0].date} to ${days[days.length-1].date}, ` +
+    `peak ${spUsd(max)} in a day`);
+
+  [0,.5,1].forEach(f => {
+    const y = P.t + ih - f*ih;
+    mk('line',{x1:P.l, x2:W-P.r, y1:y, y2:y, class:'gridline'});
+    mk('text',{x:P.l-6, y:y+3, 'text-anchor':'end', class:'ax'}, axCost(max*f));
+  });
+
+  const fill = cssv('--s1');
+  days.forEach((d,i) => {
+    const h = (d.cost||0) <= 0 ? 0 : Math.max(1, (d.cost/max)*ih);
+    if (!h) return;
+    mk('rect',{x:(P.l + i*slot + (slot-bw)/2).toFixed(2), y:(P.t+ih-h).toFixed(2),
+               width:bw.toFixed(2), height:h.toFixed(2), fill,
+               rx: bw > 4 ? 1.5 : 0});
+  });
+
+  // One overlay instead of per-day hit boxes: at 400 days a slot is under a
+  // pixel, and a sub-pixel tap target is not a tap target.
+  const cursor = mk('rect',{x:P.l, y:P.t, width:Math.max(slot,1).toFixed(2),
+                            height:ih, class:'sp-cursor', visibility:'hidden'});
+  const hit = mk('rect',{x:P.l, y:P.t, width:iw, height:ih, fill:'transparent'});
+  const at = cx => {
+    const b = svg.getBoundingClientRect();
+    const sc = (b.width/W) || 1;
+    return Math.max(0, Math.min(days.length-1,
+      Math.floor(((cx - b.left)/sc - P.l)/slot)));
+  };
+  const over = (cx, cy) => {
+    const i = at(cx), d = days[i];
+    cursor.setAttribute('x', (P.l + i*slot).toFixed(2));
+    cursor.setAttribute('visibility','visible');
+    showTip({clientX:cx, clientY:cy}, d.date,
+      `${spUsd(d.cost)} · ${spTok(d.tokens)} tokens`);
+  };
+  const out = () => { cursor.setAttribute('visibility','hidden'); hideTip(); };
+  hit.addEventListener('mousemove', e => over(e.clientX, e.clientY));
+  hit.addEventListener('mouseleave', out);
+  const touch = e => { const t = e.touches && e.touches[0];
+    if (t) over(t.clientX, t.clientY); };
+  hit.addEventListener('touchstart', touch, {passive:true});
+  hit.addEventListener('touchmove', touch, {passive:true});
+  hit.addEventListener('touchend', out);
+  hit.addEventListener('touchcancel', out);
+
+  // Date labels: as many as fit at 72px apart, never two on top of each other.
+  const want = Math.max(2, Math.min(7, Math.floor(iw/72)));
+  const step = Math.max(1, Math.floor((days.length-1)/(want-1)));
+  const idx = [];
+  for (let i = 0; i < days.length; i += step) idx.push(i);
+  const last = days.length-1;
+  if (idx[idx.length-1] !== last){
+    if (idx.length > 1 && last - idx[idx.length-1] < step*0.55) idx.pop();
+    idx.push(last);
+  }
+  // Over a window that crosses new year, "6/23" twice would be two different
+  // days a year apart, so those labels carry the year instead.
+  const spans = days[0].date.slice(0,4) !== days[last].date.slice(0,4);
+  const short = d => spans ? d.slice(2,7)
+    : (+d.split('-')[1]) + '/' + (+d.split('-')[2]);
+  idx.forEach((i,k) => {
+    const first = k === 0, lastLab = k === idx.length-1;
+    const x = idx.length === 1 ? P.l + iw/2
+      : first ? P.l : lastLab ? W-P.r : P.l + i*slot + slot/2;
+    mk('text',{x:x.toFixed(1), y:H-8, class:'ax',
+      'text-anchor': idx.length === 1 ? 'middle'
+        : first ? 'start' : lastLab ? 'end' : 'middle'}, short(days[i].date));
+  });
+  holder.appendChild(svg);
+}
+
+function spRows(items){
+  const box = el('div','sp-rows');
+  const max = Math.max(...items.map(d => d.cost||0), 0.000001);
+  const total = items.reduce((s,d) => s + (d.cost||0), 0);
+  items.forEach(d => {
+    const row = el('div','sp-row');
+    const name = el('div','sp-name');
+    name.appendChild(el('span', null, esc(d.name)));
+    if (d.sub) name.appendChild(el('em', null, esc(d.sub)));
+    if (d.badge) name.appendChild(el('span','badge', esc(d.badge)));
+    row.appendChild(name);
+    row.appendChild(el('div','sp-cost', d.cost == null
+      ? '<i>no price</i>'
+      : `${spUsd(d.cost)}<i>${total ? spPct(d.cost/total) : '—'}</i>`));
+    const track = el('div','sp-track');
+    const fill = el('div','sp-fill');
+    fill.style.width = ((d.cost||0)/max*100).toFixed(2) + '%';
+    fill.style.background = d.color;
+    if (d.cost == null) fill.style.minWidth = '0';   // an empty track, not a stub
+    if (d.dim != null) fill.style.opacity = d.dim;
+    track.appendChild(fill);
+    row.appendChild(track);
+    if (d.detail) row.appendChild(el('div','sp-detail', esc(d.detail)));
+    bindTip(row, d.name, d.cost == null ? 'no rate in the price table'
+      : `${spUsd(d.cost)} · ${total ? spPct(d.cost/total) : '0%'} of the total`);
+    box.appendChild(row);
+  });
+  return box;
+}
+
+function renderSpend(){
+  const root = document.getElementById('v-spend'); root.innerHTML = '';
+  const sp = S.spend;
+  const days = spDays(sp && sp.by_day);
+  const models = ((sp && sp.by_model) || []).slice()
+    .sort((a,b) => (b.cost||0) - (a.cost||0));
+  const tools = ((sp && sp.by_tool) || []).slice()
+    .sort((a,b) => (b.cost||0) - (a.cost||0));
+  const noUsage = ((sp && sp.tools_without_usage) || []);
+  const unpriced = ((sp && sp.unpriced_models) || []);
+
+  const mix = {input:0, output:0, cache_read:0, cache_write:0};
+  models.forEach(m => { for (const k in mix) mix[k] += Number(m[k])||0; });
+  const mixTotal = mix.input + mix.output + mix.cache_read + mix.cache_write;
+
+  const totalCost = Number(sp && sp.total_cost) ||
+    days.reduce((s,d) => s + d.cost, 0) ||
+    models.reduce((s,m) => s + (Number(m.cost)||0), 0);
+  const totalTokens = Number(sp && sp.total_tokens) ||
+    tools.reduce((s,t) => s + (Number(t.tokens)||0), 0) || mixTotal;
+
+  if (!sp || (!totalCost && !totalTokens)){
+    const c = el('div','card sp-empty');
+    c.appendChild(el('h3', null, 'No spend to show yet'));
+    c.appendChild(el('p', null, sp
+      ? 'These logs were priced, but nothing in them carries token usage — '
+        + 'so there is no cost to estimate.'
+      : 'This page was built from a stats.json that has no spend section in it. '
+        + 'Re-run analyze.py to price the usage in your logs, then rebuild.'));
+    if (noUsage.length)
+      c.appendChild(el('p', null, esc(spAnd(noUsage.map(t => TOOL_LABEL[t]||t)))
+        + ' logs carry no token usage — those sessions are never priced.'));
+    root.appendChild(c);
+    return;
+  }
+
+  /* --- KPI tiles --- */
+  const since = n => days.slice(-n).reduce((s,d) => s + d.cost, 0);
+  // Cache hits are a prompt-side measure: output tokens were never cacheable,
+  // so counting them in the denominator would understate every reader's rate.
+  const chr = (() => {
+    const v = Number(sp.cache_hit_rate);
+    if (isFinite(v) && v > 0) return v;
+    const prompt = mix.input + mix.cache_read + mix.cache_write;
+    return prompt ? mix.cache_read/prompt : 0;
+  })();
+  const head = el('div','card');
+  head.appendChild(el('h3', null, 'What the tokens cost'));
+  head.appendChild(el('p','sub',
+    (sp.estimates_note ? esc(sp.estimates_note) + ' · ' : '') +
+    (days.length
+      ? `${days[0].date} → ${days[days.length-1].date}, ` +
+        `${fmt(days.length)} day${days.length === 1 ? '' : 's'}`
+      : 'no dated spend')));
+  // The 7/30-day windows end on the last day with recorded spend, not on
+  // today — a stale stats.json should not quietly report zero.
+  const endsOn = days.length ? days[days.length-1].date : 'the last recorded day';
+  const tiles = el('div','stat-row');
+  [['Total ' + (sp.currency || 'USD'), spUsd(totalCost),
+    sp.estimates_note || 'list-price estimate'],
+   ['Last 7 days', spUsd(since(7)), `the 7 days ending ${endsOn}`],
+   ['Last 30 days', spUsd(since(30)), `the 30 days ending ${endsOn}`],
+   ['Cache hit rate', spPct(chr),
+    'cache reads as a share of the prompt-side tokens'],
+   ['Total tokens', spTok(totalTokens), `${fmt(Math.round(totalTokens))} tokens`]]
+   .forEach(([k,v,note]) => {
+    const s = el('div','stat');
+    s.appendChild(el('b', null, esc(v)));
+    s.appendChild(el('span', null, esc(k)));
+    bindTip(s, k, note);
+    tiles.appendChild(s);
+  });
+  head.appendChild(tiles);
+
+  if (mixTotal){
+    const parts = [['cache read', mix.cache_read, '--seq-2'],
+                   ['cache write', mix.cache_write, '--seq-4'],
+                   ['input', mix.input, '--seq-5'],
+                   ['output', mix.output, '--seq-7']].filter(p => p[1] > 0);
+    const bar = el('div','sp-mix');
+    const leg = el('ul','legend');
+    parts.forEach(([k,v,c]) => {
+      const seg = el('div');
+      seg.style.width = (v/mixTotal*100).toFixed(3) + '%';
+      seg.style.background = cssv(c);
+      bindTip(seg, k, `${spTok(v)} tokens · ${spPct(v/mixTotal)}`);
+      bar.appendChild(seg);
+      const li = el('li');
+      const sw = el('span','swatch'); sw.style.background = cssv(c);
+      li.appendChild(sw);
+      li.appendChild(el('span', null, `${k} · ${spTok(v)} (${spPct(v/mixTotal)})`));
+      leg.appendChild(li);
+    });
+    head.appendChild(bar);
+    head.appendChild(leg);
+  }
+
+  head.appendChild(el('p','sp-caveat',
+    '<b>List-price estimates, not your bill.</b> Every figure here is public ' +
+    'per-token pricing applied to the usage recorded in your logs. On a ' +
+    'subscription your real cost is the flat fee — read these as a relative ' +
+    'signal of where the tokens went, never as an invoice.'));
+  root.appendChild(head);
+
+  /* --- cost per day --- */
+  if (days.length > 1){
+    const c = el('div','card');
+    c.appendChild(el('h3', null, 'Cost per day'));
+    c.appendChild(el('p','sub',
+      'The whole recorded window, gaps included. Hover or tap a day for its exact cost.'));
+    const holder = el('div');
+    c.appendChild(holder);
+    root.appendChild(c);
+    requestAnimationFrame(() => spChart(holder, days));
+  }
+
+  /* --- by model / by tool --- */
+  const pair = el('div','grid2');
+
+  const mc = el('div','card');
+  mc.appendChild(el('h3', null, 'Spend by model'));
+  mc.appendChild(el('p','sub',
+    'Ranked by estimated cost. Models are deliberately uncoloured — the tool ' +
+    'palette belongs to the tools.'));
+  const shown = models.slice(0,12);
+  if (shown.length){
+    mc.appendChild(spRows(shown.map((m,i) => {
+      const bits = [];
+      if (m.input) bits.push('in ' + spTok(m.input));
+      if (m.output) bits.push('out ' + spTok(m.output));
+      if (m.cache_read) bits.push('cache read ' + spTok(m.cache_read));
+      if (m.cache_write) bits.push('cache write ' + spTok(m.cache_write));
+      return {
+        name: m.model || '(unnamed model)',
+        sub: m.tool ? (TOOL_LABEL[m.tool]||m.tool) : '',
+        cost: m.cost == null ? null : (Number(m.cost)||0),
+        badge: m.cost == null ? 'unpriced' : '',
+        color: cssv('--ink-3'),
+        dim: Math.max(0.5, 1 - i*0.05),
+        detail: bits.join(' · ')
+      };
+    })));
+    if (models.length > shown.length)
+      mc.appendChild(el('p','sp-foot',
+        `+ ${fmt(models.length - shown.length)} more models below the top 12.`));
+  } else {
+    mc.appendChild(el('p','sp-foot','No per-model breakdown in this data.'));
+  }
+  if (unpriced.length)
+    mc.appendChild(el('p','sp-foot',
+      'No rate in the price table for ' +
+      esc(spAnd(unpriced.map(String))) +
+      ' — their tokens are counted, their cost is left out rather than guessed at.'));
+  pair.appendChild(mc);
+
+  const tc = el('div','card');
+  tc.appendChild(el('h3', null, 'Spend by tool'));
+  tc.appendChild(el('p','sub',
+    'Same colours the rest of the dashboard gives each tool.'));
+  if (tools.length){
+    tc.appendChild(spRows(tools.map(t => {
+      const bits = [];
+      if (t.tokens) bits.push(spTok(t.tokens) + ' tokens');
+      if (t.sessions) bits.push(fmt(t.sessions) + ' sessions');
+      return {
+        name: TOOL_LABEL[t.tool] || t.tool || '(unknown)',
+        cost: t.cost == null ? null : (Number(t.cost)||0),
+        badge: noUsage.indexOf(t.tool) >= 0 ? 'no usage data' : '',
+        color: toolColor(t.tool),
+        detail: bits.join(' · ')
+      };
+    })));
+  } else {
+    tc.appendChild(el('p','sp-foot','No per-tool breakdown in this data.'));
+  }
+  if (noUsage.length)
+    tc.appendChild(el('p','sp-foot',
+      esc(spAnd(noUsage.map(t => TOOL_LABEL[t]||t))) +
+      ' logs carry no token usage — not priced. They are missing from this ' +
+      'breakdown rather than free.'));
+  pair.appendChild(tc);
+  root.appendChild(pair);
+}
+
+/* ================= wrapped =================
+   A slide deck driven by S.wrapped, plus S.spend for the money slide and
+   nothing else. Each slide states what it needs; a stat that is missing or
+   zero drops its slide instead of showing a hollow "0", so a thin corpus
+   still gets a coherent (shorter) deck. Nothing here touches project names
+   or paths — the last slide is an image people post. */
+const WR = {i:0, slides:[], dots:[], cv:null};
+const WR_OK = !!(S.wrapped && (Number(S.wrapped.prompts)||0) > 0);
+const WR_MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const WR_DOW = {Mon:'Monday', Tue:'Tuesday', Wed:'Wednesday', Thu:'Thursday',
+                Fri:'Friday', Sat:'Saturday', Sun:'Sunday'};
+const wrDate = s => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s||''));
+  return m ? `${+m[3]} ${WR_MON[+m[2]-1]} ${m[1]}` : String(s||'');
+};
+const wrDow = d => WR_DOW[String(d||'').slice(0,3)] || String(d||'');
+const wrHour = h => String(h).padStart(2,'0') + ':00';
+const wrNum = v => Number(v)||0;
+
+/* The peak hour is the one stat with a personality attached to it. */
+function wrHourVibe(h){
+  if (h < 5)  return ['🦉','The small hours are yours. Nobody schedules a 3am refactor — it just happens.'];
+  if (h < 9)  return ['☀️','Up before the world. Statistically almost nobody starts their prompts here.'];
+  if (h < 12) return ['☕','A classic morning shift, spent on the good problems.'];
+  if (h < 17) return ['🏙️','Dead centre of the working day. Extremely reasonable of you.'];
+  if (h < 21) return ['🌆','Evening operator — the best ideas land after the meetings stop.'];
+  return ['🌙','Late shift. The day ends when the build passes, not when the clock says so.'];
+}
+function wrPoliteVerdict(p, prompts){
+  const please = wrNum(p.please), thanks = wrNum(p.thanks), sorry = wrNum(p.sorry);
+  if (sorry > thanks && sorry > 0)
+    return 'You apologised to a language model more often than you thanked it. It has forgiven you.';
+  if (please + thanks === 0)
+    return 'Not one please, not one thank you — only apologies. Efficient, in a way.';
+  if (prompts && (please + thanks) / prompts > 0.25)
+    return 'Impeccable manners. Whatever happens next, you are on the right list.';
+  if (thanks > please)
+    return 'More thanks than pleases: gratitude after the fact rather than before it.';
+  return 'Courteous, without being sentimental about it.';
+}
+function wrScale(n){
+  const novels = n/80000;
+  if (novels >= 1)
+    return `About ${novels.toFixed(novels < 10 ? 1 : 0)} novels' worth of prose, at 80,000 words a novel.`;
+  const pages = Math.round(n/275);
+  return `About ${fmt(pages)} paperback page${pages === 1 ? '' : 's'} of prose.`;
+}
+/* top_words is [["word", n], …] in the contract; tolerate objects too. */
+function wrWords(){
+  return (((S.wrapped||{}).top_words)||[]).map(d => Array.isArray(d)
+      ? {t:String(d[0]||''), n:wrNum(d[1])}
+      : {t:String((d&&(d.t||d.word))||''), n:wrNum(d&&(d.n||d.count))})
+    .filter(d => d.t);
+}
+
+/* ---- slide construction ---- */
+const wrK = t => el('p','wr-kicker', esc(t));
+const wrBg = t => el('p','wr-big', esc(t));
+const wrMd = t => el('p','wr-mid', esc(t));
+const wrSb = t => el('p','wr-sub', t);
+const wrFn = t => el('p','wr-fine', t);
+function wrS(id, parts){
+  const s = el('section','wr-slide');
+  s.dataset.wr = id;
+  s.setAttribute('role','group');
+  parts.forEach(p => { if (p) s.appendChild(p); });
+  return s;
+}
+function wrTrio(items){
+  const box = el('div','wr-trio');
+  items.forEach(([v,k]) => {
+    const d = el('div');
+    d.appendChild(el('b', null, esc(v)));
+    d.appendChild(el('span', null, esc(k)));
+    box.appendChild(d);
+  });
+  return box;
+}
+
+function wrBuild(){
+  const w = S.wrapped || {};
+  const win = w.window || {};
+  const out = [];
+  const words = wrNum(w.words_to_ai), prompts = wrNum(w.prompts);
+  const sessions = wrNum(w.sessions), days = wrNum(w.days_active);
+  const streak = wrNum(w.longest_streak_days);
+  const busiest = w.busiest_day || {};
+  const pol = w.politeness || {};
+  const polTotal = wrNum(pol.please) + wrNum(pol.thanks) + wrNum(pol.sorry);
+  const tt = w.top_tool || {};
+  const tools = wrNum(w.tools_used);
+  const tw = wrWords();
+  const hour = Number(w.peak_hour);
+  const hasHour = isFinite(hour) && hour >= 0 && hour <= 23;
+  const wsp = w.spend || {};
+  const spTotal = wrNum(wsp.total) || wrNum((S.spend||{}).total_cost);
+  const pricey = wsp.priciest_day || null;
+
+  out.push(wrS('open', [
+    wrK('Vibecheck ⚡ Agent Wrapped'),
+    wrBg('Your AI year'),
+    win.start ? wrMd(`${wrDate(win.start)} → ${wrDate(win.end)}`) : null,
+    wrSb('Everything you typed to an AI on this machine, read back to you.'),
+    wrFn('Click, tap, or press → to move through it.')
+  ]));
+
+  if (words > 0) out.push(wrS('words', [
+    wrK('Words typed to AI'),
+    wrBg(fmt(words)),
+    wrSb(esc(wrScale(words)))
+  ]));
+
+  if (prompts > 0) out.push(wrS('volume', [
+    wrK('The shape of the year'),
+    wrTrio([[fmt(prompts),'Prompts'], sessions ? [fmt(sessions),'Sessions'] : null,
+            days ? [fmt(days),'Days active'] : null].filter(Boolean)),
+    days ? wrSb(`That is <b>${fmt(Math.round(prompts/days))}</b> prompts on an average working day.`) : null
+  ]));
+
+  if (tw.length){
+    const parts = [wrK('Most-typed words'), wrBg(tw[0].t)];
+    if (tw.length > 1){
+      const row = el('div','wr-words');
+      const size = ['clamp(23px,4.6vw,46px)','clamp(21px,4vw,39px)',
+                    'clamp(19px,3.4vw,33px)','clamp(18px,3vw,29px)'];
+      const col = ['--s1','--s3','--s4','--s5'];
+      tw.slice(1,5).forEach((d,i) => {
+        const s = el('span', null, esc(d.t) + `<i>${fmt(d.n)}</i>`);
+        s.style.fontSize = size[i]; s.style.color = cssv(col[i]);
+        row.appendChild(s);
+      });
+      parts.push(row);
+    }
+    parts.push(wrSb(`Said <b>${fmt(tw[0].n)}</b> times, and that is after the boilerplate was stripped out.`));
+    out.push(wrS('top-words', parts));
+  }
+
+  if (w.top_phrase) out.push(wrS('phrase', [
+    wrK('Your signature phrase'),
+    wrBg('“' + String(w.top_phrase) + '”'),
+    wrSb('You typed it often enough that it stopped being a phrase and became a tell.')
+  ]));
+
+  if (hasHour || w.peak_weekday){
+    const [emoji, line] = hasHour ? wrHourVibe(hour) : ['📅',''];
+    out.push(wrS('peak', [
+      el('p','wr-emoji', emoji),
+      wrK(hasHour ? 'Your peak hour' : 'Your peak day'),
+      wrBg(hasHour ? wrHour(hour) : wrDow(w.peak_weekday)),
+      hasHour && w.peak_weekday
+        ? wrMd('and ' + wrDow(w.peak_weekday) + ' was the day')
+        : null,
+      line ? wrSb(esc(line)) : null
+    ]));
+  }
+
+  if (streak > 0 || wrNum(busiest.prompts) > 0){
+    const parts = [];
+    if (streak > 0){
+      parts.push(wrK('Longest streak'), wrBg(fmt(streak)),
+        wrMd('day' + (streak === 1 ? '' : 's') + ' in a row'));
+      if (wrNum(busiest.prompts) > 0)
+        parts.push(wrSb(`Your single biggest day was <b>${esc(wrDate(busiest.date))}</b> — ` +
+          `${fmt(busiest.prompts)} prompts.`));
+    } else {
+      parts.push(wrK('Your biggest day'), wrBg(fmt(busiest.prompts)),
+        wrMd('prompts in one day'));
+      if (busiest.date) parts.push(wrSb('That was ' + esc(wrDate(busiest.date)) + '.'));
+    }
+    out.push(wrS('streak', parts));
+  }
+
+  if (polTotal > 0) out.push(wrS('polite', [
+    wrK('Manners'),
+    wrTrio([[fmt(pol.please||0),'Please'], [fmt(pol.thanks||0),'Thank you'],
+            [fmt(pol.sorry||0),'Sorry']]),
+    wrSb(esc(wrPoliteVerdict(pol, prompts)))
+  ]));
+
+  if (tt.name) out.push(wrS('tool', [
+    wrK('Your ride-or-die'),
+    wrBg(TOOL_LABEL[tt.name] || String(tt.name)),
+    wrNum(tt.share) ? wrMd(spPct(tt.share) + ' of everything you asked for') : null,
+    tools > 1 ? wrSb(`You reached for <b>${fmt(tools)}</b> different tools this year. You kept coming back to this one.`)
+              : wrSb('One tool, all year. No wandering.')
+  ]));
+
+  if (spTotal > 0) out.push(wrS('spend', [
+    wrK('What the tokens would have cost'),
+    wrBg(spUsd(spTotal)),
+    pricey && wrNum(pricey.cost) > 0
+      ? wrSb(`Your priciest day was <b>${esc(wrDate(pricey.date))}</b> at ${esc(spUsd(pricey.cost))}.`)
+      : null,
+    wrFn('List-price estimates applied to the usage in your logs — a relative signal ' +
+         'of where the tokens went, never an invoice. On a subscription your real cost ' +
+         'is the flat fee.')
+  ]));
+
+  if (w.rising_word) out.push(wrS('rising', [
+    wrK('On the rise'),
+    wrBg(String(w.rising_word)),
+    wrSb('Barely in your vocabulary when the window opened. Now it is everywhere.')
+  ]));
+
+  out.push(wrCardSlide());
+  return out;
+}
+
+/* ---- the share card ---- */
+function wrCardSlide(){
+  const w = S.wrapped || {};
+  const box = el('div','wr-card');
+  box.appendChild(wrK('Your share card'));
+  const cv = el('canvas','wr-canvas');
+  cv.width = 1080; cv.height = 1350;
+  cv.setAttribute('role','img');
+  const tw = wrWords();
+  cv.setAttribute('aria-label',
+    `Agent Wrapped share card: ${fmt(w.words_to_ai)} words typed to AI, ` +
+    `${fmt(w.prompts)} prompts` + (tw.length ? `, most-typed word "${tw[0].t}"` : '') + '.');
+  WR.cv = cv;
+  box.appendChild(cv);
+  const btn = el('button','wr-dl','Download PNG');
+  btn.type = 'button';
+  btn.addEventListener('click', wrDownload);
+  box.appendChild(btn);
+  box.appendChild(wrFn('1080 × 1350, drawn in this page — nothing is uploaded. ' +
+    'No project names, no paths: counts and vocabulary only.'));
+  return wrS('card', [box]);
+}
+
+function wrDownload(e){
+  if (e) e.stopPropagation();
+  const cv = WR.cv;
+  if (!cv) return;
+  const w = S.wrapped || {};
+  const year = Number(w.year) ||
+    Number(String((w.window||{}).end||'').slice(0,4)) || new Date().getFullYear();
+  const grab = url => {
+    const a = el('a'); a.href = url;
+    a.download = `vibecheck-wrapped-${year}.png`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => { try { URL.revokeObjectURL(url); } catch(err){} }, 4000);
+  };
+  if (cv.toBlob) cv.toBlob(b => { if (b) grab(URL.createObjectURL(b)); }, 'image/png');
+  else grab(cv.toDataURL('image/png'));
+}
+
+const wrHexA = (h, a) => {
+  h = String(h||'').trim();
+  let r=0, g=0, b=0;
+  if (/^#[0-9a-f]{3}$/i.test(h)){
+    r = parseInt(h[1]+h[1],16); g = parseInt(h[2]+h[2],16); b = parseInt(h[3]+h[3],16);
+  } else if (/^#[0-9a-f]{6}$/i.test(h)){
+    r = parseInt(h.slice(1,3),16); g = parseInt(h.slice(3,5),16); b = parseInt(h.slice(5,7),16);
+  } else {
+    const m = /rgba?\(([^)]+)\)/.exec(h);
+    if (m){ const p = m[1].split(','); r = +p[0]; g = +p[1]; b = +p[2]; }
+  }
+  return `rgba(${r|0},${g|0},${b|0},${a})`;
+};
+
+/* 4:5, the shape every social feed shows whole. Drawn from the live CSS
+   variables, so the card always matches the theme the page is wearing. */
+function wrDrawCard(cv){
+  const W = 1080, H = 1350, PAD = 78;
+  const ctx = cv.getContext('2d');
+  const w = S.wrapped || {};
+  const win = w.window || {};
+  const ink = cssv('--ink'), ink2 = cssv('--ink-2'), ink3 = cssv('--ink-3');
+  const rule = cssv('--rule-strong'), hair = cssv('--rule');
+  const disp = cssv('--display') || 'sans-serif';
+  const mono = cssv('--mono') || 'monospace';
+  const acc = ['--s1','--s3','--s4','--s5'].map(cssv);
+  const s1 = cssv('--s1'), s2 = cssv('--s2');
+  const LS = ('letterSpacing' in ctx);
+
+  /* one text primitive: optional em-tracking, optional shrink-to-fit */
+  function T(str, o){
+    str = String(str);
+    o = o || {};
+    let size = o.size || 40;
+    const fam = o.fam || disp, weight = o.weight || 600, track = o.track || 0;
+    const align = o.align || 'left';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = o.color || ink;
+    const setf = () => {
+      ctx.font = `${weight} ${size}px ${fam}`;
+      if (LS) ctx.letterSpacing = (track*size).toFixed(2) + 'px';
+    };
+    const wide = () => LS || !track ? ctx.measureText(str).width
+      : Array.from(str).reduce((a,c) => a + ctx.measureText(c).width + track*size, 0) - track*size;
+    setf();
+    let m = wide();
+    if (o.max && m > o.max){
+      size = Math.max(9, Math.floor(size * o.max / m));
+      setf(); m = wide();
+      while (m > o.max && size > 9){ size -= 1; setf(); m = wide(); }
+    }
+    const x0 = align === 'center' ? o.x - m/2 : align === 'right' ? o.x - m : o.x;
+    if (LS || !track){
+      ctx.textAlign = 'left';
+      ctx.fillText(str, x0, o.y);
+    } else {                       // no ctx.letterSpacing (Firefox): space it by hand
+      ctx.textAlign = 'left';
+      let x = x0;
+      Array.from(str).forEach(c => { ctx.fillText(c, x, o.y); x += ctx.measureText(c).width + track*size; });
+    }
+    if (LS) ctx.letterSpacing = '0px';
+    return {w:m, size, x:x0};
+  }
+  const hairline = (x1, y, x2, col) => {
+    ctx.strokeStyle = col || hair; ctx.lineWidth = 1.4;
+    ctx.beginPath(); ctx.moveTo(x1, y+0.5); ctx.lineTo(x2, y+0.5); ctx.stroke();
+  };
+
+  /* --- ground --- */
+  ctx.clearRect(0,0,W,H);
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, cssv('--surface-1'));
+  bg.addColorStop(1, cssv('--page'));
+  ctx.fillStyle = bg; ctx.fillRect(0,0,W,H);
+  // Two washes, kept near the threshold of noticing: enough to stop the flat
+  // fill looking like a screenshot, not enough to read as a gradient.
+  const wash = (x, y, r, col, a) => {
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, wrHexA(col, a)); g.addColorStop(1, wrHexA(col, 0));
+    ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+  };
+  wash(1010, -40, 860, s1, 0.10);
+  wash(30, 1400, 760, s2, 0.07);
+  ctx.strokeStyle = rule; ctx.lineWidth = 2;
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(26, 26, W-52, H-52, 22);
+  else ctx.rect(26, 26, W-52, H-52);
+  ctx.stroke();
+
+  /* --- masthead --- */
+  const year = Number(w.year) ||
+    Number(String(win.end||'').slice(0,4)) || new Date().getFullYear();
+  let bx = PAD;
+  bx += T('VIBECHECK', {x:bx, y:128, size:24, fam:mono, weight:500, track:.18, color:ink}).w;
+  bx += T(' ⚡ ', {x:bx, y:128, size:24, fam:mono, weight:500, color:ink3}).w;
+  T('AGENT WRAPPED', {x:bx, y:128, size:24, fam:mono, weight:500, track:.18, color:ink3});
+  T(String(year), {x:W-PAD, y:128, size:24, fam:mono, weight:500, track:.1,
+                   color:ink3, align:'right'});
+  hairline(PAD, 158, W-PAD, rule);
+  ctx.fillStyle = s1; ctx.fillRect(PAD, 157, 132, 4);   // masthead accent
+
+  /* --- blocks, laid out with the slack shared out between them --- */
+  const COL = W - 2*PAD;
+  const blocks = [];
+  const words = wrNum(w.words_to_ai);
+  const tw = wrWords();
+  const label = (s, y) => T(s, {x:PAD, y, size:19, fam:mono, weight:500,
+                               track:.2, color:ink3, max:COL});
+  // Display type set to the measure rather than to a fixed size: the hero
+  // number is the same width whether it is four digits or nine.
+  const toWidth = (str, weight, cap) => {
+    ctx.font = `${weight} 100px ${disp}`;
+    const at100 = ctx.measureText(str).width || 1;
+    return Math.max(28, Math.min(cap, Math.floor(100*COL/at100)));
+  };
+
+  if (words > 0) blocks.push({h:236, draw:y => {
+    label('WORDS TYPED TO AI', y+18);
+    T(fmt(words), {x:PAD, y:y+216, size:toWidth(fmt(words), 800, 248), weight:800,
+                   track:-.045, color:ink, max:COL});
+  }});
+
+  if (tw.length) blocks.push({h: tw.length > 1 ? 250 : 172, draw:y => {
+    label('MOST-TYPED WORDS', y+18);
+    const r = T(tw[0].t, {x:PAD, y:y+140, size:toWidth(tw[0].t, 800, 148),
+                          weight:800, track:-.04, color:ink, max:COL});
+    // Under a descender ("python") a fixed offset would strike the glyph.
+    ctx.font = `800 ${r.size}px ${disp}`;
+    const desc = ctx.measureText(tw[0].t).actualBoundingBoxDescent || r.size*0.2;
+    ctx.fillStyle = wrHexA(s1, .9);
+    ctx.fillRect(PAD, y + 140 + Math.max(desc, 6) + 15, r.w, 7);
+    const rest = tw.slice(1,5);
+    if (!rest.length) return;
+    const sizes = [42, 38, 34, 31];
+    const meas = rest.map((d,i) => {
+      ctx.font = `600 ${sizes[i]}px ${disp}`;
+      return ctx.measureText(d.t).width;
+    });
+    const gap = 42;
+    const total = meas.reduce((a,b) => a+b, 0) + gap*(rest.length-1);
+    const scale = total > COL ? COL/total : 1;
+    let x = PAD;
+    rest.forEach((d,i) => {
+      T(d.t, {x, y:y+242, size:Math.round(sizes[i]*scale), weight:600, track:-.03,
+              color:acc[i%acc.length]});
+      x += meas[i]*scale;
+      if (i < rest.length-1){
+        ctx.fillStyle = wrHexA(ink3, .5);
+        ctx.beginPath(); ctx.arc(x + gap*scale/2, y+230, 3.5, 0, Math.PI*2); ctx.fill();
+        x += gap*scale;
+      }
+    });
+  }});
+
+  if (w.top_phrase) blocks.push({h:110, draw:y => {
+    label('SIGNATURE PHRASE', y+18);
+    T('“' + w.top_phrase + '”', {x:PAD, y:y+96,
+      size:toWidth('“' + w.top_phrase + '”', 600, 72), weight:600, track:-.03,
+      color:ink2, max:COL});
+  }});
+
+  /* the six numbers worth posting; whatever is missing simply is not a cell */
+  const wsp = w.spend || {};
+  const spTotal = wrNum(wsp.total) || wrNum((S.spend||{}).total_cost);
+  const hour = Number(w.peak_hour);
+  const cells = [
+    wrNum(w.prompts) ? ['PROMPTS', fmt(w.prompts)] : null,
+    wrNum(w.sessions) ? ['SESSIONS', fmt(w.sessions)] : null,
+    wrNum(w.days_active) ? ['DAYS ACTIVE', fmt(w.days_active)] : null,
+    (isFinite(hour) && hour >= 0 && hour <= 23)
+      ? ['PEAK HOUR', wrHour(hour) + ' ' + wrHourVibe(hour)[0]] : null,
+    (w.top_tool && w.top_tool.name)
+      ? ['TOP TOOL', TOOL_LABEL[w.top_tool.name] || String(w.top_tool.name)] : null,
+    spTotal > 0 ? ['SPEND (EST.)', spUsd(spTotal)] : null,
+    wrNum(w.longest_streak_days)
+      ? ['LONGEST STREAK', fmt(w.longest_streak_days) + 'd'] : null,
+    wrNum(w.tools_used) ? ['TOOLS USED', fmt(w.tools_used)] : null
+  ].filter(Boolean).slice(0, 6);
+
+  if (cells.length){
+    const cols = cells.length <= 2 ? cells.length : 3;
+    const rows = Math.ceil(cells.length/cols);
+    const rh = 140;
+    blocks.push({h: rows*rh + 6, draw:y => {
+      const cw = COL/cols;
+      for (let r = 0; r <= rows; r++) hairline(PAD, y + r*rh, W-PAD, r ? hair : rule);
+      ctx.strokeStyle = wrHexA(ink3, .3); ctx.lineWidth = 1.2;
+      for (let c = 1; c < cols; c++){        // column rules, the .stat-row idiom
+        const x = PAD + c*cw;
+        ctx.beginPath();
+        ctx.moveTo(x+0.5, y+20); ctx.lineTo(x+0.5, y + rows*rh - 20); ctx.stroke();
+      }
+      cells.forEach((c, i) => {
+        const col = i%cols, pad = col ? 26 : 0;
+        const cx = PAD + col*cw + pad, cy = y + Math.floor(i/cols)*rh;
+        T(c[0], {x:cx, y:cy+50, size:17, fam:mono, weight:500, track:.16,
+                 color:ink3, max:cw-pad-14});
+        T(c[1], {x:cx, y:cy+112, size:52, weight:600, track:-.03,
+                 color:ink, max:cw-pad-22});
+      });
+    }});
+  }
+
+  const top = 202, bottom = H - 172;
+  const used = blocks.reduce((a,b) => a + b.h, 0);
+  const gap = blocks.length > 1
+    ? Math.min(96, Math.max(16, (bottom - top - used)/(blocks.length-1))) : 0;
+  let y = top + Math.max(0, (bottom - top - used - gap*(blocks.length-1))/2);
+  blocks.forEach(b => { b.draw(y); y += b.h + gap; });
+
+  /* --- footer --- */
+  hairline(PAD, H-126, W-PAD, rule);
+  if (win.start)
+    T(`${wrDate(win.start)} — ${wrDate(win.end)}`,
+      {x:PAD, y:H-82, size:21, fam:mono, weight:400, color:ink3, max:(W-2*PAD)*0.6});
+  T('read locally · nothing uploaded',
+    {x:W-PAD, y:H-82, size:21, fam:mono, weight:400, color:ink3, align:'right'});
+}
+
+let wrPainted = false;
+function wrPaint(){
+  if (!WR.cv) return;
+  try { wrDrawCard(WR.cv); } catch(err){ /* a bad card must not kill the deck */ }
+  if (!wrPainted && document.fonts && document.fonts.ready){
+    wrPainted = true;                       // repaint once the webfonts land
+    document.fonts.ready.then(() => { if (WR.cv) wrPaint(); });
+  }
+}
+
+/* ---- deck mechanics ---- */
+function wrGo(i){
+  const n = WR.slides.length;
+  if (!n) return;
+  WR.i = i = Math.max(0, Math.min(n-1, i));
+  WR.slides.forEach((s,k) => {
+    s.classList.toggle('on', k === i);
+    s.setAttribute('aria-hidden', String(k !== i));
+  });
+  WR.dots.forEach((d,k) => d.setAttribute('aria-current', String(k === i)));
+  if (WR.bar) WR.bar.style.width = ((i+1)/n*100).toFixed(2) + '%';
+  if (WR.count) WR.count.textContent = `${i+1} / ${n}`;
+  if (WR.prev) WR.prev.disabled = i === 0;
+  if (WR.next) WR.next.disabled = i === n-1;
+  if (WR.slides[i].dataset.wr === 'card') wrPaint();
+}
+
+let wrKeysBound = false;
+function wrBindKeys(){
+  if (wrKeysBound) return;
+  wrKeysBound = true;
+  addEventListener('keydown', e => {
+    const view = document.getElementById('v-wrapped');
+    if (!view || !view.classList.contains('on') || !WR.slides.length) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const tag = (e.target && e.target.tagName) || '';
+    if (tag === 'SELECT' || tag === 'INPUT' || tag === 'TEXTAREA') return;
+    const inDeck = !!(WR.deck && WR.deck.contains(document.activeElement));
+    // Arrows steer the deck whenever it is the thing being looked at; the keys
+    // that also scroll the page only do so once the deck actually has focus.
+    const seen = (() => {
+      if (!WR.deck) return false;
+      const r = WR.deck.getBoundingClientRect();
+      return r.top < innerHeight*0.65 && r.bottom > innerHeight*0.35;
+    })();
+    let d = 0;
+    if ((e.key === 'ArrowRight' && (seen || inDeck)) ||
+        (e.key === 'PageDown' && inDeck)) d = 1;
+    else if ((e.key === 'ArrowLeft' && (seen || inDeck)) ||
+             (e.key === 'PageUp' && inDeck)) d = -1;
+    else if ((e.key === ' ' || e.key === 'Spacebar' || e.key === 'Enter') && inDeck){
+      if (tag === 'BUTTON' || tag === 'A') return;   // let the control do its job
+      d = 1;
+    } else if (e.key === 'Home' && inDeck){ e.preventDefault(); wrGo(0); return; }
+    else if (e.key === 'End' && inDeck){ e.preventDefault(); wrGo(WR.slides.length-1); return; }
+    if (!d) return;
+    e.preventDefault();
+    wrGo(WR.i + d);
+  });
+}
+
+function renderWrapped(){
+  const root = document.getElementById('v-wrapped');
+  root.innerHTML = '';
+  if (!S.wrapped){
+    const c = el('div','card sp-empty');
+    c.appendChild(el('h3', null, 'No Wrapped in this data'));
+    c.appendChild(el('p', null, 'This page was built from a stats.json with no ' +
+      'wrapped section. Re-run analyze.py, then rebuild.'));
+    root.appendChild(c);
+    return;
+  }
+  const slides = wrBuild();
+  WR.slides = slides;
+  WR.dots = [];
+
+  const deck = el('div','wr-deck');
+  deck.tabIndex = 0;
+  deck.setAttribute('role','group');
+  deck.setAttribute('aria-roledescription','slide deck');
+  deck.setAttribute('aria-label','Agent Wrapped');
+  WR.deck = deck;
+
+  const prog = el('div','wr-prog');
+  WR.bar = el('i');
+  prog.appendChild(WR.bar);
+  deck.appendChild(prog);
+
+  const stage = el('div','wr-stage');
+  slides.forEach((s,i) => {
+    s.setAttribute('aria-label', `Slide ${i+1} of ${slides.length}`);
+    stage.appendChild(s);
+  });
+  stage.addEventListener('click', e => {
+    if (e.target.closest('button,a,canvas')) return;
+    wrGo(WR.i + 1);
+  });
+  // Tap already advances; a swipe is what a thumb expects next to it.
+  let tx = 0, ty = 0;
+  stage.addEventListener('touchstart', e => {
+    const t = e.changedTouches[0]; tx = t.clientX; ty = t.clientY;
+  }, {passive:true});
+  stage.addEventListener('touchend', e => {
+    const t = e.changedTouches[0], dx = t.clientX - tx, dy = t.clientY - ty;
+    if (Math.abs(dx) > 46 && Math.abs(dx) > Math.abs(dy)*1.5) wrGo(WR.i + (dx < 0 ? 1 : -1));
+  }, {passive:true});
+  deck.appendChild(stage);
+
+  const nav = el('div','wr-nav');
+  nav.appendChild(el('div','wr-hint','← → or click to move'));
+  const ctl = el('div','wr-ctl');
+  const arrow = (glyph, d, lab) => {
+    const b = el('button','wr-arrow', glyph);
+    b.type = 'button'; b.setAttribute('aria-label', lab);
+    b.addEventListener('click', ev => { ev.stopPropagation(); wrGo(WR.i + d); });
+    return b;
+  };
+  WR.prev = arrow('‹', -1, 'Previous slide');
+  WR.next = arrow('›', 1, 'Next slide');
+  const dots = el('div','wr-dots');
+  slides.forEach((s,i) => {
+    const d = el('button','wr-dot');
+    d.type = 'button';
+    d.setAttribute('aria-label', `Go to slide ${i+1}`);
+    d.addEventListener('click', ev => { ev.stopPropagation(); wrGo(i); });
+    WR.dots.push(d);
+    dots.appendChild(d);
+  });
+  ctl.appendChild(WR.prev); ctl.appendChild(dots); ctl.appendChild(WR.next);
+  nav.appendChild(ctl);
+  WR.count = el('div','wr-count');
+  nav.appendChild(WR.count);
+  deck.appendChild(nav);
+
+  root.appendChild(deck);
+  wrBindKeys();
+  wrGo(WR.i);          // a resize or theme flip re-renders: keep the reader's place
+}
+
+/* Clicking the tab should put the deck under the sticky tab bar; landing on
+   it from a cold load should not yank the page away from the masthead. */
+function wrScrollTo(){
+  const nav = document.querySelector('nav.tabs');
+  if (!nav) return;
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  try { scrollTo({top: nav.offsetTop, behavior: reduce ? 'auto' : 'smooth'}); }
+  catch(e){ scrollTo(0, nav.offsetTop); }
+  if (WR.deck) WR.deck.focus({preventScroll:true});
+}
+
+/* ================= tabs & boot ================= */
+const VIEWS = [['wrapped','✨ Wrapped',renderWrapped],
+               ['overview','Overview',renderOverview],['time','Time',renderTime],
+               ['tools','Tools',renderTools],['projects','Projects',renderProjects],
+               ['activity','Activity',renderActivity],
+               ['spend','Spend',renderSpend]];
+// An empty deck is worse than no deck: with nothing wrapped, the tab and the
+// landing default both disappear and Overview takes back the front door.
+if (!WR_OK) VIEWS.shift();
+const HOME = VIEWS[0][0];
+const drawn = {};
+const curView = () => {
+  const h = (location.hash||'').replace('#','');
+  return VIEWS.some(v => v[0] === h) ? h : HOME;
+};
+function selectTab(id, fromClick){
+  VIEWS.forEach(([vid]) => {
+    document.getElementById('v-'+vid).classList.toggle('on', vid===id);
+    const b = document.getElementById('tab-'+vid);
+    b.setAttribute('aria-selected', String(vid===id));
+  });
+  if (!drawn[id]){ VIEWS.find(v=>v[0]===id)[2](); drawn[id]=true; }
+  location.hash = id;
+  if (fromClick && id === 'wrapped') requestAnimationFrame(wrScrollTo);
+}
+function boot(){
+  if (SCHEMA_OK.indexOf(S.schema_version) < 0){
+    document.body.innerHTML =
+      `<div class="wrap"><p style="padding:60px 0">This page expects stats schema `+
+      `v${SCHEMA_OK.join(' or v')} but the data is v${S.schema_version}. `+
+      `Re-run analyze.py.</p></div>`;
+    return;
+  }
+  renderHeader();
+  const tabs = document.getElementById('tabs');
+  VIEWS.forEach(([id,label]) => {
+    const b = el('button', null, label);
+    b.id = 'tab-'+id; b.type='button'; b.setAttribute('role','tab');
+    b.setAttribute('aria-selected','false');
+    b.addEventListener('click', () => selectTab(id, true));
+    tabs.appendChild(b);
+  });
+  selectTab(curView());
+  // Back/forward between deep links used to go nowhere: the hash moved and the
+  // page did not. Assigning the same hash fires nothing, so this cannot loop.
+  addEventListener('hashchange', () => selectTab(curView()));
+
+  const btn = document.getElementById('themeBtn');
+  btn.addEventListener('click', () => {
+    const cur = document.documentElement.getAttribute('data-theme');
+    const next = cur === 'dark' ? 'light' : cur === 'light' ? 'dark'
+      : (matchMedia('(prefers-color-scheme: dark)').matches ? 'light':'dark');
+    document.documentElement.setAttribute('data-theme', next);
+    try { localStorage.setItem('lex-theme', next); } catch(e){}
+    Object.keys(drawn).forEach(k => delete drawn[k]);
+    document.getElementById('rail').innerHTML='';
+    document.getElementById('railMonths').innerHTML='';
+    document.getElementById('stats').innerHTML='';
+    renderHeader();
+    selectTab(curView());
+  });
+  try {
+    const saved = localStorage.getItem('lex-theme');
+    if (saved) document.documentElement.setAttribute('data-theme', saved);
+  } catch(e){}
+
+  let rt;
+  addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => {
+    Object.keys(drawn).forEach(k => delete drawn[k]);
+    selectTab(curView());
+  }, 220); });
+}
+boot();
+</script>

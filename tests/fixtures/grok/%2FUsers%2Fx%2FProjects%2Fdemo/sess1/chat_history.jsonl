@@ -1,0 +1,5 @@
+{"type":"user","content":"Translate the onboarding copy to Hebrew"}
+{"type":"user","content":"INJECTED REMINDER","synthetic_reason":"reminder"}
+{"type":"assistant","content":"Done, the copy is translated","tool_calls":[{"id":"g1","function":{"name":"write_file"}}]}
+{"type":"tool_result","tool_call_id":"g1","content":"wrote 12 lines"}
+{"type":"backend_tool_call","kind":{"tool_type":"web_search","action":{"type":"search","query":"hebrew pluralization rules"}}}
