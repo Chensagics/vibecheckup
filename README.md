@@ -252,7 +252,7 @@ adapters/   base.py protoscan.py claude_code.py codex.py grok.py
 wcstats/    clean.py tokenize.py score.py facets.py spend.py wrapped.py
             prices.json
 samples/    generate.py         deterministic synthetic corpus for --demo
-tests/      test_all.py test_bootstrap.py fixtures/
+tests/      test_all.py test_bootstrap.py test_i18n_time.py fixtures/
 snapshot.py                     keep a dated copy of a built dashboard
 data/       events.ndjson stats.json vocab.json     (generated, gitignored)
 dashboard.html                                      (generated, gitignored)
