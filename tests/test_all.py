@@ -619,6 +619,17 @@ class TestStatsContract(unittest.TestCase):
     def test_schema_version(self):
         self.assertEqual(self.S["schema_version"], SCHEMA_VERSION)
 
+    def test_no_absolute_paths_anywhere(self):
+        """stats.json is what the README tells you to hand to an agent, and the
+        dashboard renders the commands cloud, so a home directory reaching this
+        file leaks a username into every screenshot. `git -C /Users/me/proj-x`
+        used to land here whole."""
+        import re
+        blob = json.dumps(self.S)
+        found = set(re.findall(r"(?:/Users/|/home/|[A-Z]:\\\\Users\\\\)[^\"\\\\ ,]{2,80}",
+                               blob))
+        self.assertEqual(found, set(), f"absolute paths in stats.json: {found}")
+
     def test_required_top_level_keys(self):
         for k in ("generated_at", "coverage", "totals", "clouds", "trends",
                   "activity", "source_events", "spend", "wrapped"):

@@ -99,6 +99,11 @@ def command_label(cmd):
             if p.startswith("-"):
                 continue
             p = p.strip("'\"")
+            # A path is never a subcommand, and `git -C /Users/me/proj-x` would
+            # otherwise match the hyphen test below and publish a home directory
+            # into the commands cloud, which the dashboard renders.
+            if "/" in p or p.startswith((".", "~", "$")):
+                break
             if p.isalpha() or "-" in p:
                 sub = f"{head} {p}"
             break
