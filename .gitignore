@@ -4,6 +4,8 @@
 data/
 snapshots/
 dashboard.html
+# Scrubbed and safe to hand to a person; still nobody else's business in git.
+dashboard-shareable.html
 
 # Internal design notes — they quantify the author's own AI usage
 # (file counts, corpus size, retention dates). Local only.

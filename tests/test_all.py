@@ -625,9 +625,18 @@ class TestStatsContract(unittest.TestCase):
         file leaks a username into every screenshot. `git -C /Users/me/proj-x`
         used to land here whole."""
         import re
+        # Matched against the JSON *text*, where one real backslash is written
+        # as two. An earlier version of this test only knew `C:\Users\` with an
+        # uppercase drive, so `c:\users\` and every UNC path passed it.
         blob = json.dumps(self.S)
-        found = set(re.findall(r"(?:/Users/|/home/|[A-Z]:\\\\Users\\\\)[^\"\\\\ ,]{2,80}",
-                               blob))
+        # The drive-letter arm needs both guards: `(?<!\w)` so the `s:` in
+        # "Errors:\nManualFetchError" is not read as a drive, and a required
+        # second separator so a path must actually have two segments.
+        found = set(re.findall(
+            r"(?:/Users/|/home/"                                  # posix homes
+            r"|(?<!\w)[A-Za-z]:\\\\[^\"\\\\ ,]{1,60}\\\\"         # C:\x\  c:\x\
+            r"|\\\\\\\\[^\"\\\\ ,]+\\\\)"                         # \\host\share\
+            r"[^\"\\\\ ,]{2,80}", blob))
         self.assertEqual(found, set(), f"absolute paths in stats.json: {found}")
 
     def test_required_top_level_keys(self):

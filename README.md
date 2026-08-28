@@ -8,7 +8,8 @@ One command reads the session logs already on your machine — Claude Code, Code
 Grok CLI, Gemini CLI, Antigravity — and builds a single self-contained
 `dashboard.html`: your **Agent Wrapped**, your **Lexicon**, your **Spend**.
 
-Nothing is installed, nothing is uploaded, `python3` is the only requirement.
+Nothing is uploaded. Nothing is installed either — no packages, no system-wide
+install, nothing on your PATH; `python3` is the only requirement.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-d97757.svg)](LICENSE)
 [![Python 3.9+](https://img.shields.io/badge/Python-3.9%2B-3fb950.svg)](https://www.python.org/)
@@ -59,8 +60,22 @@ usage at all and are badged **no usage data** instead of being counted as zero.
 
 ## Run it
 
-**One line.** No clone, no pip, no dependencies — it fetches the repo into
-`~/.vibecheckup` and runs there:
+Two equal ways in. Both run the same three stages locally and neither installs
+anything.
+
+**From a clone.** Nothing lands outside the directory you pick:
+
+```bash
+git clone https://github.com/chensagics/vibecheckup.git
+cd vibecheckup
+./vibecheckup.sh            # ingest -> analyze -> build -> open dashboard.html
+./vibecheckup.sh --demo     # a synthetic corpus instead: no real logs needed
+./vibecheckup.sh --scrub    # also build a shareable copy — see Privacy
+```
+
+**Or one line**, if you would rather not clone. No pip, no dependencies — it
+unpacks this repo into `~/.vibecheckup` and runs from there. That directory is
+the only thing it leaves behind, and a clone avoids even that:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/chensagics/vibecheckup/main/vibecheckup.sh | sh
@@ -86,17 +101,11 @@ then ask if I want to proceed. If I say yes, install and run it, then read the
 stats it generates and tell me what a year of my prompts says about me.
 ```
 
-Note: that last step shows your `stats.json` — your vocabulary and your project
-names — to whatever model you are driving. The local run itself uploads nothing;
-handing the results to an agent is your call, and the dashboard alone answers
-the same questions without it.
-
-From a checkout:
-
-```bash
-./vibecheckup.sh            # ingest -> analyze -> build -> open dashboard.html
-./vibecheckup.sh --demo     # a synthetic corpus instead: no real logs needed
-```
+Note: that last step shows your `stats.json` — your vocabulary, your project
+names, and the raw error text your tools hit, quoted from the logs — to whatever
+model you are driving. The local run itself uploads nothing; handing the results
+to an agent is your call, and the dashboard alone answers the same questions
+without it.
 
 Re-run any time to refresh; there is no cache to go stale. A full run re-reads
 everything — a few thousand files in well under a minute.
@@ -105,6 +114,7 @@ everything — a few thousand files in well under a minute.
 |---|---|
 | `--demo` | Build from a deterministic synthetic corpus (`samples/generate.py`). Never touches your real logs. |
 | `--force`, `-f` | With `--demo`, overwrite an existing `data/events.ndjson` without asking. |
+| `--scrub` | Also write `dashboard-shareable.html` — the same page without project names, error text or shell commands — and open that one. `dashboard.html` is still written, unchanged. See [Privacy](#privacy). |
 | `--tool NAME` | Limit ingest to one source; repeatable. `claude_code`, `codex`, `grok`, `gemini_cli`, `antigravity`. |
 | `--limit N` | Cap files per source — a quick smoke run. |
 | `--no-open` | Build the dashboard but don't open a browser. |
@@ -116,9 +126,10 @@ and `VIBECHECKUP_HOME` (where it lands, default `~/.vibecheckup`).
 The script is a thin wrapper over three stages you can also run yourself:
 
 ```bash
-python3 ingest.py          # all session logs  -> data/events.ndjson
-python3 analyze.py         # events            -> data/stats.json
-python3 build_dashboard.py # stats + template  -> dashboard.html
+python3 ingest.py                  # all session logs  -> data/events.ndjson
+python3 analyze.py                 # events            -> data/stats.json
+python3 build_dashboard.py         # stats + template  -> dashboard.html
+python3 build_dashboard.py --scrub # ... and dashboard-shareable.html
 ```
 
 Python 3.9+, standard library only. `python3` is the single requirement; on a
@@ -138,21 +149,76 @@ dashboard opens over `file://`. The one network call in the project is the
 
 - **The repo ships no user data.** `data/`, `snapshots/` and `dashboard.html`
   are gitignored, because they contain your real vocabulary, project names and
-  local paths.
+  local paths. `dashboard-shareable.html` is gitignored too — it is safe to
+  hand to a person, which is not the same as belonging in a commit.
+- **`dashboard.html` inlines everything in `stats.json`, verbatim.** That is
+  what makes it a single file you can keep — and it means the file carries your
+  project and worktree directory names, one word cloud per repo, the raw error
+  signatures (which quote your own commit messages, account names and API
+  errors back at you), and every shell command your agents ran. Treat the file
+  as private, and treat **screenshots of the Projects and Activity tabs** the
+  same way: both are lists of your repo names.
+- **`--scrub` is how you make a copy you can hand over.**
+  `python3 build_dashboard.py --scrub` (or `./vibecheckup.sh --scrub`) writes a
+  separate `dashboard-shareable.html` and leaves `dashboard.html` alone. It
+  removes the whole `clouds.by_project` facet, every `errors` list, every
+  `commands` list and the session ids; it replaces the repo names in the
+  Activity table with `project 01`, `project 02`, … so the shape of your year
+  survives without the names; and from the clouds that remain it drops any term
+  that matches your account name, one of your project names, or the shape of a
+  filename, hostname or path. What is left is the global and per-tool prose
+  clouds, phrases, trends, spend, the activity histograms and Wrapped. The
+  page says `SHARE COPY` in its footer and on its Spend tab, so a recipient can
+  tell which one they were given.
+- **What `--scrub` does not do is read your mind.** The clouds it keeps are
+  still your own prose, so an unreleased codename you typed all year is still an
+  unreleased codename you typed all year — the scrub removes strings harvested
+  from your machine, not vocabulary. Read the page before you send it.
+- **Your own name is masked everywhere, in every build.** vibecheckup works out
+  the strings that identify you — your account name, your git name and email,
+  and the account half of your git remotes — and removes them from the word
+  clouds, along with the worktree branch names it sees while grouping sessions
+  by repo, because an unreleased feature name is not vocabulary. It will not
+  auto-mask a login that is also an ordinary word (`mark`, `will`, `sam`,
+  `docs`, `main`); it prints what it skipped, and why, on every run.
+
+  To add what it cannot work out for itself — a codename, a client, a handle, or
+  one of those skipped words — pass `--redact`:
+
+  ```bash
+  ./vibecheckup.sh --redact acme-corp --redact bluesky
+  ```
+
+  It is repeatable and also works on `ingest.py` and `analyze.py`. For strings
+  you always want masked, put one per line in
+  `~/.config/vibecheckup/redact` (`#` starts a comment), or point
+  `$VIBECHECKUP_REDACT_FILE` elsewhere. Explicit strings skip the common-word
+  check — if you say it is yours, it goes. `--branch-redaction decorated` masks
+  only the `worktree-<branch>` spellings and leaves the bare branch name; `off`
+  disables branch masking entirely.
 - **The Wrapped card carries no directory names and no file paths** — that rule
   is enforced in `wcstats/wrapped.py`, not in the page, so it holds for anything
   built from `stats.json`. **The words on it are a different matter: they are
   yours**, straight out of your own prompts, and a product codename you typed all
-  year can land at the top of the list. Read the card before posting it, and tap
-  any word to drop it — the card and the PNG both redraw without it. You choose
-  what to share: the card is a PNG you download, not something this tool posts
-  anywhere.
+  year can land at the top of the list. **The card also prints one dollar
+  figure: your estimated spend for the whole year.** It is a list-price estimate
+  rather than a bill, but it is still a number about you, in an image people
+  post publicly. Read the card before posting it, and tap any word to drop it —
+  the card and the PNG both redraw without it. You choose what to share: the
+  card is a PNG you download, not something this tool posts anywhere.
+- **The Wrapped deck is a share surface too, not just the card.** Only the card
+  has a Download button, but a screenshot of any slide works just as well, and
+  the slides carry more than the card does: your spend total and the date of
+  your priciest day, the date of your busiest day, your peak hour and weekday,
+  and how many times you said please, thanks and sorry.
 - Politeness counters and every word cloud run over *cleaned* prose, so a
   "please" injected by a hook or a skill definition can never be credited to
   you.
 - The built page makes **no** network requests at all: no fonts, no scripts, no
   images fetched from anywhere. It renders identically on a machine that has
-  never been online.
+  never been online. That is a security property and not a privacy one — the
+  page never phones home because it never needs to, since everything it shows is
+  already inside the file you are holding.
 
 ## Costs are estimates, not a bill
 
@@ -252,10 +318,13 @@ adapters/   base.py protoscan.py claude_code.py codex.py grok.py
 wcstats/    clean.py tokenize.py score.py facets.py spend.py wrapped.py
             prices.json
 samples/    generate.py         deterministic synthetic corpus for --demo
-tests/      test_all.py test_bootstrap.py test_i18n_time.py fixtures/
+tests/      test_all.py test_bootstrap.py test_i18n_time.py test_scrub.py
+            fixtures/
 snapshot.py                     keep a dated copy of a built dashboard
+                                (--scrub keeps the shareable one instead)
 data/       events.ndjson stats.json vocab.json     (generated, gitignored)
 dashboard.html                                      (generated, gitignored)
+dashboard-shareable.html        only with --scrub   (generated, gitignored)
 ```
 
 `data/vocab.json` holds full ungated counts; `stats.json` keeps top-N per facet
@@ -268,8 +337,8 @@ python3 -m unittest discover -s tests   # fixtures only, no network
 ./vibecheckup.sh --demo --no-open         # full pipeline on synthetic data
 ```
 
-**161 tests on a fresh clone, 180 once you have built a dashboard.** The
-difference is 19 checks that read `data/stats.json` and `dashboard.html`; with
+**321 tests on a fresh clone, 341 once you have built a dashboard.** The
+difference is the checks that read `data/stats.json` and `dashboard.html`; with
 nothing built yet they skip rather than fail, so a clone with no logs still runs
 green.
 
@@ -278,6 +347,10 @@ The fixture suite covers adapter classification, the cleaner, the scoring maths,
 pricing (including the Codex cumulative-total trap and the unknown-model null),
 the `stats.json` contract, the inlining that keeps a stray `<script` in your
 logs from blanking the page, and the bootstrap script's argument handling.
+`tests/test_scrub.py` seeds a synthetic corpus with a fake account name, fake
+repo names and fake error text, then greps the built share copy for every one of
+them — the leak has to be visible in the unscrubbed build for the same test to
+pass, so a zero cannot come from an empty fixture.
 
 ## Roadmap
 

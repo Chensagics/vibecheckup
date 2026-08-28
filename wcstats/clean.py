@@ -6,9 +6,19 @@ hook attachments -- unfiltered, the corpus is overwhelmingly machine text and
 every cloud reads "skill, important, file, the".
 
 Adapters classify records by type; every judgement about *content* lives here.
+
+The bottom half of the file is *self-redaction*. Every other rule in this
+module recognises a leak by its SHAPE -- an address has an @, a path has
+slashes, an `ls -l` row starts with a mode field. A username does not: written
+as ``chensagi/finn`` in a sentence it is two ordinary-looking words, and the
+only thing that distinguishes it from vocabulary is knowing whose machine this
+is. So the last defence is a list of known literals -- derived from the account
+running the tool, from git, and from the worktree branch names ingest sees --
+masked wherever they appear.
 """
 from __future__ import annotations
 
+import os
 import re
 
 # Kinds that may contain human- or model-authored prose.
@@ -87,6 +97,37 @@ INJECTED_MARKERS = (
 
 RE_URL = re.compile(r"https?://\S+")
 RE_PATH = re.compile(r"(?:/[\w.\-@+]+){2,}/?")
+
+# Windows and UNC paths. RE_PATH above is forward-slash only, so a home
+# directory written the Windows way used to survive cleaning whole: the README
+# supports Windows through WSL and Git Bash, where `C:\Users\<name>` is exactly
+# what tool output prints, and `C:\Users\jane.doe\Projects\acme-client` came
+# out of the tokenizer as jane.doe / projects / acme-client.
+_WIN_SEG = r"[^\\/:*?\"<>|\s]+"
+RE_WINPATH = re.compile(
+    # C:\Users\jane\x  and  C:/Users/jane/x  -- the lookbehind keeps "note:/x"
+    # and a leftover "s://" from being read as a drive letter.
+    r"(?<![\w:])[A-Za-z]:[\\/](?:" + _WIN_SEG + r"[\\/]?)*"
+    # \\fileserver\share\Clients\budget.xlsx
+    r"|\\\\" + _WIN_SEG + r"(?:[\\/]" + _WIN_SEG + r")+[\\/]?"
+)
+
+# An address is identity -- the author's or, worse, a third party's.
+RE_EMAIL = re.compile(r"[\w.+\-]+@[\w\-]+(?:\.[\w\-]+)+")
+
+# Last labels that mark a token as a hostname rather than a word. Deliberately
+# curated: ccTLDs that are also everyday file extensions (.py .ts .rs .sh .md
+# .pl .so .cs .ml .in .el .pm .cc .cx) are left OUT, so `app.py` and
+# `server.ts` stay ordinary vocabulary. Shared by tokenize.keep() and by
+# facets.error_signature() so the two can never drift apart.
+HOSTNAME_TLDS = frozenset("""
+com org net int edu gov mil info biz name pro xyz app dev io co ai me tv
+cloud tech site online store shop blog page live life work team group email
+network systems solutions agency studio design media news wiki space fun
+uk de fr jp cn ru br it es nl se no dk fi ca au ch at be ie nz kr mx ar
+cl za pt gr cz hu ro tr ua sg hk tw vn th ph my il eu us gg
+""".split())
+
 RE_UUID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.I)
 RE_HEX = re.compile(r"\b(?:0x)?[0-9a-f]{12,}\b", re.I)
 RE_B64 = re.compile(r"\b[A-Za-z0-9+/]{40,}={0,2}\b")
@@ -99,6 +140,17 @@ RE_WS = re.compile(r"[ \t]+")
 RE_DIFF = re.compile(r"^\s*(?:[+-]{1,3}\s|@@|diff --git|index [0-9a-f]{7})")
 RE_TREE = re.compile(r"^\s*[│├└─|`+\\-]{2,}")
 RE_LOGLINE = re.compile(r"^\s*(?:\[\d{2}:\d{2}|\d{4}-\d{2}-\d{2}T\d{2}:|at [A-Za-z_$]+ \()")
+
+# A POSIX long listing. The owner and group columns are a username, and the
+# row is otherwise ordinary-looking words, so an `ls -l` block pasted into a
+# session used to sail through as prose: "chensagi staff" reached the shipped
+# landing tab as a top phrase, 126 occurrences, and "chensagi" ranked as a
+# distinctive term. RE_PATH cannot help -- the username arrives with no slash.
+# Covers the mode field plus macOS's `@`/`+` ACL flag and Linux's `.` SELinux
+# flag; `ls -la` hardlink counts change nothing, the anchor is the mode.
+RE_LS_LONG = re.compile(r"^[-dlbcpsD][rwxsStTL-]{9}[@+.]?(?:\s|$)")
+# ...and the header `ls -l` prints above it (`total 2504`, `total 4.0K`).
+RE_LS_TOTAL = re.compile(r"^total\s+[\d.,]+[kKmMgGtTpP]?[bB]?$")
 
 
 # --- source code and markup -------------------------------------------------
@@ -144,6 +196,8 @@ def _drop_line(line: str) -> bool:
     s = line.strip()
     if not s:
         return False
+    if RE_LS_LONG.match(s) or RE_LS_TOTAL.match(s):
+        return True
     if RE_DIFF.match(s) or RE_TREE.match(s) or RE_LOGLINE.match(s):
         return True
     if RE_CODE_LINE.search(s):
@@ -179,12 +233,20 @@ def clean_prose(text: str) -> str:
     lines = [ln for ln in t.splitlines() if not _drop_line(ln)]
     t = "\n".join(lines)
     t = RE_URL.sub(" ", t)
+    t = RE_EMAIL.sub(" ", t)
     t = RE_UUID.sub(" ", t)
     t = RE_B64.sub(" ", t)
     t = RE_HEX.sub(" ", t)
+    # Before RE_PATH: on `C:/Users/jane/x` the POSIX rule would eat the tail
+    # and leave a bare `C:` behind, which reads as a token.
+    t = RE_WINPATH.sub(" ", t)
     t = RE_PATH.sub(" ", t)
     t = RE_TAG.sub(" ", t)
     t = RE_NUM.sub(" ", t)
+    # Last, and deliberately so: the shape-based rules above have already
+    # removed everything they can recognise, and what is left is ordinary
+    # language plus whatever the installed redactor knows by name.
+    t = active_redactor().scrub(t)
     return RE_WS.sub(" ", t).strip()
 
 
@@ -198,3 +260,584 @@ def prose_text(ev: dict) -> str:
     if is_injected(text) or looks_like_code(text):
         return ""
     return clean_prose(text)
+
+
+# =============================================================================
+# Self-redaction: masking literals that only the local machine can identify.
+# =============================================================================
+
+# The placeholder a facet KEY collapses to. Prose gets a space instead -- a
+# word cloud has nowhere to put a marker, and a run of "redacted" tokens would
+# itself become a top term.
+LABEL_PLACEHOLDER = "redacted"
+
+# Auto-derived identities shorter than this are refused. This is the cheap half
+# of the common-word guard and it is doing most of the work: the logins that
+# collide with English are overwhelmingly short (mark, will, sam, art, max,
+# rob, bill, jack, dawn, ray, joy, ivy, rose, sky). Anything the guard refuses
+# is still redactable by hand with --redact.
+MIN_IDENTITY_LEN = 5
+# A branch name with no separator in it is just a word, so it has to clear a
+# higher bar than a compound like `combat-engine` before it is masked bare.
+MIN_BARE_BRANCH_LEN = 6
+
+# Words a login or a branch name may legitimately BE. Redacting one of these
+# would delete real vocabulary from every cloud in exchange for no privacy, so
+# an auto-derived identity that matches is skipped and reported. Deliberately
+# generous -- the cost of an entry is only that the user has to pass --redact
+# for that one string, while the cost of a missing entry is silently eating a
+# word out of the whole corpus. Three groups: frequent English, given names
+# that are also nouns, and the vocabulary of branch names and software.
+COMMON_WORDS = frozenset("""
+about above after again against alone along already also although always among
+another answer around because become before begin being below better between
+beyond bring build built cannot change check clean clear close could course
+create data does done down during each early enough even ever every example
+first found from full give given going great group hand have hear help here
+high hold home hour house however human idea important inside instead into
+issue just keep kind know large last late later learn least leave less letter
+level life light like line list little live local long look love made make
+many matter maybe mean might mind more most move much must name near need
+never next night nothing notice number often once only open order other over
+own part people perhaps person place plan play point power press probably
+problem public quite rather reach read ready real reason remember report rest
+right room round said same school second seem sense several short should show
+side simple since small some sound space speak start state still stop story
+study such sure system take talk teach thing think three through time today
+together took toward town tree true turn under until upon used using usual
+value very view voice wait walk want watch water week well were what when
+where which while white whole will wish with within without word work world
+would write wrong year young your
+mark marc will sam samuel art arthur max rob bill jack grace hope faith ray
+dawn drew tim ben dan jay joy june may april august summer autumn river brook
+sky rose lily daisy jasmine olive ruby pearl amber jade ivy holly heather iris
+violet hunter chase cash king earl duke prince blaze storm rain star angel
+frank rich don guy hardy noble price stone wood ford banks brown white green
+gray grey black young long short small best fair love bell page reed hall
+ward cook fisher miller baker taylor turner walker parker carter cooper hayes
+main master trunk dev devel develop development staging stage prod production
+release releases hotfix feature features bugfix fix fixes test tests testing
+next canary beta alpha trunk integration sandbox experiment experimental wip
+temp tmp draft backup legacy refactor cleanup docs doc documentation build
+builds deploy deployment upgrade migration migrate revert patch base work
+working current latest stable edge preview demo example sample default review
+api web app apps core admin user users site sites blog shop store team teams
+dashboard telemetry spec specs scripts script assets asset config configs
+server client mobile desktop backend frontend database search login signup
+auth payment payments billing profile settings account accounts notification
+notifications analytics report reports export import upload download image
+images video audio chart charts graph graphs table tables form forms button
+modal sidebar header footer layout theme themes style styles design designs
+editor viewer player engine parser router cache queue worker service services
+module modules package packages library plugin plugins widget component
+components landing pricing about contact support docs help faq legal privacy
+terms blog news press careers jobs about
+""".split())
+
+# Only these characters can sit inside one "token" for redaction purposes.
+# Deliberately the same tail set wcstats.tokenize.RE_TOKEN accepts, MINUS the
+# slash: in `chensagi/finn` the handle is the leak and `finn` is a project name
+# the dashboard already publishes as a label, so the slug splits and only the
+# left half goes.
+RE_TOKENISH = re.compile(r"[0-9A-Za-z_.+#'’\-]+")
+
+# A GitHub/GitLab/Bitbucket-style remote, in either spelling:
+#   https://github.com/OWNER/repo.git      git@github.com:OWNER/repo.git
+RE_REMOTE_OWNER = re.compile(
+    r"^(?:[a-z][\w+.\-]*://(?:[^/@\s]+@)?[^/\s]+/|[\w.\-]+@[\w.\-]+:)"
+    r"([\w.\-]+)/", re.I)
+
+# `12345678+handle@users.noreply.github.com` -- GitHub's privacy address. The
+# handle is exactly the string that shows up in `handle/repo` slugs, so this
+# one shape is worth special-casing.
+RE_GH_NOREPLY = re.compile(r"^(\d+)\+(.+)$")
+
+
+def is_common_word(s: str) -> bool:
+    """Would redacting this string cost real vocabulary?"""
+    return s.strip().lower() in COMMON_WORDS
+
+
+def identity_verdict(lit, min_len=MIN_IDENTITY_LEN):
+    """(accept, reason) for one auto-derived literal.
+
+    Explicit --redact strings never come through here: if somebody says their
+    handle is `sam`, that is a decision they are entitled to make about their
+    own corpus. This guard only governs what we redact WITHOUT being asked,
+    where a false positive silently deletes a word from every cloud.
+    """
+    s = (lit or "").strip().lower()
+    if not s:
+        return False, "empty"
+    if not any(c.isalpha() for c in s):
+        return False, "no letters"
+    if len(s) < min_len:
+        return False, f"shorter than {min_len} characters"
+    if is_common_word(s):
+        return False, "a common word"
+    # `a-b` where either half is itself a common word is still fine (that is
+    # what `combat-engine` is); only the whole string has to be distinctive.
+    return True, ""
+
+
+class Redactor:
+    """A set of known literals, masked wherever they appear at a token edge.
+
+    Matching rule, and the reason for it: a literal counts when it starts a
+    token or follows a non-alphanumeric character inside one, and then the
+    WHOLE token goes. That covers the three positions the leak actually takes
+    -- bare (`chensagi`), in a slug (`chensagi/finn`), and inside a compound
+    (`worktree-combat-engine`, `combat-engine-handoff.md`, `graphify-out`,
+    `graphify's`) -- plus the run-on forms a plain word-boundary rule misses
+    (`chensagics`, `graphifyignore`). It deliberately does NOT match in the
+    middle of a word, so a hypothetical identity `river` cannot eat `driver`.
+    """
+
+    __slots__ = ("_lits", "_probe", "_anchor", "_cache")
+
+    def __init__(self, literals=()):
+        self._lits = set()
+        self._probe = None
+        self._anchor = None
+        # hits() is called once per surviving token -- millions of times over a
+        # real corpus, against a vocabulary of only tens of thousands of
+        # distinct strings. Memoizing turns the regex into a dict lookup.
+        self._cache = {}
+        self.add_all(literals)
+
+    # -- construction --------------------------------------------------------
+
+    def add(self, lit) -> bool:
+        lit = (lit or "").strip().lower()
+        if not lit or lit in self._lits:
+            return False
+        self._lits.add(lit)
+        self._compile()
+        return True
+
+    def add_all(self, lits) -> int:
+        n = 0
+        for lit in lits or ():
+            s = (lit or "").strip().lower()
+            if s and s not in self._lits:
+                self._lits.add(s)
+                n += 1
+        if n:
+            self._compile()
+        return n
+
+    @staticmethod
+    def _pattern(lit):
+        """One literal, spelled with any separator.
+
+        `chen.sagi.cs`, `chen_sagi_cs` and `chen-sagi-cs` are one identity
+        written three ways, and the corpus contained two of them. Same for a
+        branch: `combat-engine` and `combat_engine` name the same branch.
+        """
+        parts = re.split(r"[._\-]+", lit)
+        if len(parts) > 1 and all(parts):
+            return r"[._\-]+".join(re.escape(p) for p in parts)
+        return re.escape(lit)
+
+    def _compile(self):
+        # Longest first so an alternation prefers `graphify-ab-control` over
+        # `graphify`; with whole-token removal the outcome is the same either
+        # way, but it keeps the match spans honest for anyone debugging.
+        alt = "|".join(self._pattern(x) for x in
+                       sorted(self._lits, key=lambda s: (-len(s), s)))
+        self._probe = re.compile(alt, re.I)
+        self._anchor = re.compile(
+            r"(?:^|(?<=[^0-9A-Za-z]))(?:" + alt + r")", re.I)
+        self._cache = {}
+
+    @property
+    def literals(self):
+        return sorted(self._lits)
+
+    def __len__(self):
+        return len(self._lits)
+
+    def __bool__(self):
+        return bool(self._lits)
+
+    # -- use -----------------------------------------------------------------
+
+    def hits(self, token) -> bool:
+        """True when this token carries one of the literals at a token edge."""
+        if not self._anchor or not token:
+            return False
+        got = self._cache.get(token)
+        if got is None:
+            got = bool(self._anchor.search(token))
+            if len(self._cache) > 200_000:
+                self._cache.clear()
+            self._cache[token] = got
+        return got
+
+    def scrub(self, text: str, placeholder: str = " ") -> str:
+        """Text in, text out, with every offending token replaced.
+
+        The default replacement is a space, which is what prose wants: a word
+        cloud has nowhere to render a marker and a repeated "REDACTED" token
+        would climb the chart. Error signatures pass one in, because they are
+        already written in that idiom (PATH, HOST, EMAIL, MSG) and a gap in the
+        middle of a failure message reads as a bug.
+
+        The whole-text probe first: a plain literal alternation over a message
+        is one C-level scan, and the overwhelming majority of messages mention
+        nobody, so the per-token pass runs on the few that do.
+        """
+        if not text or not self._probe or not self._probe.search(text):
+            return text
+        return RE_TOKENISH.sub(
+            lambda m: placeholder if self._anchor.search(m.group(0))
+            else m.group(0),
+            text)
+
+    def scrub_label(self, label, placeholder=LABEL_PLACEHOLDER) -> str:
+        """A facet KEY in, a safe key out.
+
+        A cloud keyed on the empty string is worse than useless, so a label
+        that redacts away entirely becomes the placeholder rather than
+        vanishing -- the bucket still exists and still carries its counts.
+        """
+        if not label:
+            return label
+        if not self._probe or not self._probe.search(label):
+            return label
+        out = " ".join(self.scrub(label).split()).strip(" -_/.")
+        return out or placeholder
+
+
+# The redactor clean_prose() consults. Empty by default: importing this module
+# must never start masking things on its own, and every test that does not opt
+# in sees the old behaviour exactly.
+_ACTIVE = Redactor()
+
+
+def active_redactor() -> Redactor:
+    return _ACTIVE
+
+
+def install_redactor(redactor) -> Redactor:
+    """Make `redactor` the one clean_prose() applies. Returns the previous one."""
+    global _ACTIVE
+    prev = _ACTIVE
+    _ACTIVE = redactor if redactor is not None else Redactor()
+    return prev
+
+
+# --- deriving the identities -------------------------------------------------
+
+def git_config_pairs(text):
+    """((section, subsection, key), value) for a git-config file's contents.
+
+    A tiny parser rather than `git config --list`: it works on a HOME that is
+    not this process's, which is what makes the derivation testable, and it
+    costs no subprocess per repository when reading dozens of .git/config
+    files looking for remotes.
+    """
+    section = sub = ""
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line or line[0] in "#;":
+            continue
+        if line.startswith("["):
+            head = line[1:].split("]")[0].strip()
+            if '"' in head:
+                section, _, rest = head.partition('"')
+                section = section.strip().lower()
+                sub = rest.rsplit('"', 1)[0]
+            else:
+                section, sub = head.lower(), ""
+            continue
+        if "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        yield (section, sub, key.strip().lower()), val.strip().strip('"')
+
+
+def _git_config_files(home):
+    return [os.path.join(home, ".gitconfig"),
+            os.path.join(home, ".config", "git", "config")]
+
+
+def _read(path):
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+    except OSError:
+        return ""
+
+
+def identities_from_email(addr):
+    """Every plausible handle inside an address's local part."""
+    local = (addr or "").split("@")[0].strip()
+    if not local:
+        return []
+    m = RE_GH_NOREPLY.match(local)
+    if m:
+        # 71827484+chensagi -> chensagi, and never the numeric id.
+        local = m.group(2)
+    out = [local]
+    for piece in re.split(r"[+._\-]+", local):
+        if piece and not piece.isdigit() and piece not in out:
+            out.append(piece)
+    return out
+
+
+def owner_from_remote_url(url):
+    """The account a git remote belongs to, or None."""
+    m = RE_REMOTE_OWNER.match((url or "").strip())
+    return m.group(1) if m else None
+
+
+def owners_from_git_config(text):
+    """Remote owners named in one .git/config."""
+    out = []
+    for (section, _sub, key), val in git_config_pairs(text):
+        if section == "remote" and key == "url":
+            owner = owner_from_remote_url(val)
+            if owner:
+                out.append(owner)
+    return out
+
+
+def derive_identities(home=None, repo_configs=(), extra_git_configs=()):
+    """Candidate identity literals for the person running this tool.
+
+    Sources, in the order they are trusted, unioned rather than ranked -- each
+    one is wrong on some machine and they corroborate each other on most:
+
+      1. the local account name (the home directory's basename). Always
+         present, and it is already inside every ingest root.
+      2. `[user] name` and `[user] email` from the user's git config, plus the
+         handles hiding in the address's local part -- including GitHub's
+         `<id>+<handle>@users.noreply.github.com` privacy form.
+      3. the account half of every git remote in `repo_configs` (the
+         `.git/config` contents of the repositories the corpus mentions).
+         This is what catches an `owner/repo` slug whose owner is spelled
+         differently from the local login.
+
+    Returns (accepted, skipped) where skipped is [(literal, reason)] -- see
+    identity_verdict for why anything is ever skipped.
+    """
+    home = home or os.path.expanduser("~")
+    cands = []
+    base = os.path.basename(str(home).rstrip("/"))
+    if base:
+        cands.append(base)
+    texts = [_read(p) for p in _git_config_files(home)]
+    texts.extend(extra_git_configs or ())
+    for text in texts:
+        for (section, _sub, key), val in git_config_pairs(text):
+            if section != "user":
+                continue
+            if key == "name":
+                # A display name is often "Jane Doe": each word is a candidate,
+                # and the guard throws the short ones back.
+                cands.append(val)
+                cands.extend(val.split())
+            elif key == "email":
+                cands.extend(identities_from_email(val))
+        cands.extend(owners_from_git_config(text))
+    for text in repo_configs or ():
+        cands.extend(owners_from_git_config(text))
+
+    accepted, skipped, seen = [], [], set()
+    for c in cands:
+        s = (c or "").strip().lower()
+        if not s or s in seen:
+            continue
+        seen.add(s)
+        ok, why = identity_verdict(s)
+        (accepted if ok else skipped).append(s if ok else (s, why))
+    return accepted, skipped
+
+
+# --- deriving the branch names -----------------------------------------------
+
+def _segments(name):
+    return [s for s in re.split(r"[-_]+", name or "") if s]
+
+
+def branch_redaction_terms(pairs, min_bare=MIN_BARE_BRANCH_LEN):
+    """Worktree branch names -> (bare, decorated, skipped).
+
+    `pairs` is what ingest saw: (branch, repo) for every worktree path it
+    normalised, repo possibly "".
+
+    * `decorated` are always safe. `worktree-<branch>` is not a word in any
+      language; the only way that string exists is that somebody wrote it
+      about this branch. These go in unconditionally, whatever the branch is
+      called, which is what makes a branch named `docs` or `main` survivable.
+    * `bare` is the branch name itself, and it only goes in when it cannot be
+      mistaken for vocabulary: a compound (`combat-engine`, `native-ota`)
+      always qualifies, a single word has to clear MIN_BARE_BRANCH_LEN and the
+      common-word list.
+    * ...plus the SHARED STEM of two or more sibling branches in one repo.
+      `graphify-ab-control`, `graphify-ab-graph`, `graphify-ab2-control` and
+      `graphify-ab2-graph` are four arms of one experiment, and the thing the
+      owner does not want published is the experiment: `graphify`. A stem
+      shared by siblings is a feature-family name; a leading segment of a
+      LONE branch is not (that rule would offer up `native`, `combat` and
+      `ios`), so two siblings is the bar.
+    """
+    branches, repos = {}, {}
+    for item in pairs or ():
+        branch, repo = (item if isinstance(item, (tuple, list)) else (item, ""))
+        b = (branch or "").strip().strip("/").lower()
+        if not b or b in ("worktrees", "workspaces"):
+            continue
+        branches[b] = True
+        repos.setdefault((repo or "").strip().lower(), set()).add(b)
+
+    decorated, bare, skipped = set(), set(), []
+    for b in branches:
+        for marker in ("worktree", "worktrees", "workspace", "workspaces"):
+            decorated.add(f"{marker}-{b}")
+        segs = _segments(b)
+        if len(segs) > 1:
+            ok, why = identity_verdict(b, min_len=MIN_IDENTITY_LEN)
+        else:
+            ok, why = identity_verdict(b, min_len=min_bare)
+        if ok:
+            bare.add(b)
+        else:
+            skipped.append((b, why))
+
+    for _repo, sibs in repos.items():
+        if len(sibs) < 2:
+            continue
+        stems = {}
+        for b in sibs:
+            segs = _segments(b)
+            for i in range(1, len(segs)):
+                stems.setdefault("-".join(segs[:i]), set()).add(b)
+        for stem, owners in stems.items():
+            if len(owners) < 2 or stem in bare:
+                continue
+            ok, why = identity_verdict(stem, min_len=min_bare)
+            if ok:
+                bare.add(stem)
+            else:
+                skipped.append((stem, why))
+
+    return sorted(bare), sorted(decorated), skipped
+
+
+def read_redact_file(path):
+    """User-supplied literals: one per line, `#` starts a comment."""
+    out = []
+    for raw in _read(path).splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if line:
+            out.append(line)
+    return out
+
+
+REDACT_FILE_ENV = "VIBECHECKUP_REDACT_FILE"
+REDACT_FILE_DEFAULT = os.path.join("~", ".config", "vibecheckup", "redact")
+
+REDACT_HELP = (
+    "extra literal to mask everywhere (repeatable). Use it for a handle, "
+    "codename or client the tool cannot derive on its own, or for one it "
+    "skipped as a common word. Also read from " + REDACT_FILE_DEFAULT +
+    " (or $" + REDACT_FILE_ENV + "), one string per line, # for comments."
+)
+
+BRANCH_MODES = ("full", "decorated", "off")
+
+
+def redact_file_path(env=None):
+    env = os.environ if env is None else env
+    return env.get(REDACT_FILE_ENV) or os.path.expanduser(REDACT_FILE_DEFAULT)
+
+
+def build_redaction(home=None, repo_configs=(), branch_pairs=(), extra=(),
+                    branch_mode="full", read_file=True, env=None, sidecar=None):
+    """The one place a Redactor is assembled, so both stages agree.
+
+    Returns (redactor, report). The report is for the TERMINAL -- it names the
+    literals so the user can see what is being masked on their own machine.
+    It must never be written into stats.json or vocab.json, which are the
+    files that get shared: a list of exactly the strings somebody wanted
+    hidden is the leak, spelled out.
+    """
+    explicit = [s.strip() for s in (extra or ()) if s and s.strip()]
+    if read_file:
+        explicit += read_redact_file(redact_file_path(env))
+
+    identities, skipped = derive_identities(home=home, repo_configs=repo_configs)
+    bare, decorated, branch_skipped = branch_redaction_terms(branch_pairs)
+    if branch_mode == "off":
+        bare, decorated = [], []
+    elif branch_mode == "decorated":
+        bare = []
+
+    # ingest.py's sidecar carries what only the filesystem could answer -- the
+    # git remotes of the repositories the sessions ran in. It has already been
+    # through the guard once, so it is merged into the buckets it came from
+    # rather than being passed off as something the user typed.
+    def merge(base, key):
+        extra_vals = (sidecar or {}).get(key) or []
+        if branch_mode == "off" and key in ("branches", "decorated"):
+            return base
+        if branch_mode == "decorated" and key == "branches":
+            return base
+        return sorted(set(base) | {v.strip().lower() for v in extra_vals
+                                   if isinstance(v, str) and v.strip()})
+
+    identities = merge(identities, "identities")
+    bare = merge(bare, "branches")
+    decorated = merge(decorated, "decorated")
+    explicit = sorted({s.lower() for s in explicit}
+                      | {v.strip().lower() for v in
+                         (sidecar or {}).get("explicit") or []
+                         if isinstance(v, str) and v.strip()})
+
+    r = Redactor()
+    r.add_all(identities)
+    r.add_all(bare)
+    r.add_all(decorated)
+    # Explicit strings bypass the guard entirely -- see identity_verdict.
+    r.add_all(explicit)
+    report = {
+        "identities": identities,
+        "branches": bare,
+        "decorated": decorated,
+        "explicit": explicit,
+        "skipped": skipped + branch_skipped,
+        "branch_mode": branch_mode,
+    }
+    return r, report
+
+
+def format_redaction(report, width=6):
+    """A few terminal lines describing what will be masked, and what was not."""
+    def show(items):
+        items = list(items)
+        head = ", ".join(items[:width])
+        return head + (f" (+{len(items) - width} more)" if len(items) > width else "")
+
+    lines = []
+    n = (len(report["identities"]) + len(report["branches"])
+         + len(report["decorated"]) + len(report["explicit"]))
+    lines.append(f"redaction        {n} literal{'' if n == 1 else 's'} masked "
+                 f"in prose and in every facet")
+    if report["identities"]:
+        lines.append(f"  identities     {show(report['identities'])}")
+    if report["branches"]:
+        lines.append(f"  branches       {show(report['branches'])}")
+    if report["decorated"]:
+        lines.append(f"  worktree forms {len(report['decorated'])} decorated "
+                     f"spellings (worktree-<branch> and friends)")
+    if report["explicit"]:
+        lines.append(f"  --redact       {show(report['explicit'])}")
+    if report["skipped"]:
+        pairs = ", ".join(f"{s} ({why})" for s, why in report["skipped"][:width])
+        more = len(report["skipped"]) - width
+        lines.append(f"  NOT masked     {pairs}{f' (+{more} more)' if more > 0 else ''}")
+        lines.append("                 redacting these would delete real words; "
+                     "pass --redact STR to force one.")
+    return "\n".join(lines)

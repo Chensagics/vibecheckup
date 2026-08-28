@@ -512,6 +512,7 @@ function renderHeader(){
   const t = S.totals, cov = S.coverage;
   const months = Object.keys(S.clouds.by_month).sort();
   document.getElementById('eyebrow').textContent =
+    (S.share_mode ? 'SHARE COPY · ' : '') +
     `${Object.keys(cov).length} tools · ${months[0]} – ${months[months.length-1]}`;
   const stats = document.getElementById('stats');
   [['Sessions', t.sessions], ['Events read', t.events], ['Prompts', t.prompts],
@@ -765,8 +766,11 @@ function renderProjects(){
   const root = document.getElementById('v-projects'); root.innerHTML='';
   const head = el('div','card');
   head.appendChild(el('h3',null,'What each repo was really about'));
-  head.appendChild(el('p','sub',
-    'Distinctive terms per project, against the whole corpus. Busiest 24 repos by prompt count.'));
+  // In a share copy there are no repos to describe, so the usual sub-line
+  // would be advertising content that was deliberately removed.
+  head.appendChild(el('p','sub', S.share_mode
+    ? 'Omitted from this shared copy — project names never leave the machine that built it.'
+    : 'Distinctive terms per project, against the whole corpus. Busiest 24 repos by prompt count.'));
   root.appendChild(head);
   const grid = el('div','grid3');
   Object.entries(S.clouds.by_project).forEach(([proj, b]) => {

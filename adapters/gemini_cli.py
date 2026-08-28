@@ -5,7 +5,7 @@ import json
 import os
 from glob import glob
 
-from .base import Event, argv_head, iso, usage
+from .base import Event, argv_head, iso, project_from_cwd, usage
 
 NAME = "gemini_cli"
 ROOT = os.path.expanduser("~/.gemini/tmp")
@@ -29,7 +29,9 @@ def _project_label(path, project_hash):
                 except (json.JSONDecodeError, ValueError):
                     pass
                 if raw.startswith("/"):
-                    return os.path.basename(raw.rstrip("/"))
+                    # Same normalization as every other adapter: a recovered
+                    # cwd can be a worktree or a temp dir just as easily.
+                    return project_from_cwd(raw)
             except OSError:
                 pass
     return f"gemini:{(project_hash or '')[:8]}"

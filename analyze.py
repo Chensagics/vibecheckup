@@ -15,13 +15,17 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from collections import Counter, defaultdict
 from datetime import date, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from wcstats.clean import prose_text  # noqa: E402
+from adapters.base import OBSERVED, normalize_project  # noqa: E402
+from wcstats.clean import (BRANCH_MODES, LABEL_PLACEHOLDER,  # noqa: E402
+                           REDACT_HELP, build_redaction, format_redaction,
+                           install_redactor, prose_text)
 from wcstats.facets import Facets, error_signature, RE_EXT, SHELL_SUBCMD  # noqa: E402
 from wcstats.score import top_n, trends  # noqa: E402
 from wcstats.spend import Spend, local_date  # noqa: E402
@@ -36,6 +40,10 @@ OUT = os.path.join(DATA, "stats.json")
 # The sidecar is derived from --out, never hard-coded: running with a scratch
 # --out must not overwrite the real data/vocab.json.
 VOCAB_NAME = "vocab.json"
+# Written by ingest.py, which is the only stage that can see the filesystem
+# the sessions ran on. Optional: everything in it can be recovered here except
+# the git remotes, so an old corpus still gets redacted.
+REDACT_NAME = "redact.json"
 WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 # 2: events carry model/usage; stats.json gains "spend" and "wrapped".
 SCHEMA_VERSION = 2
@@ -45,6 +53,112 @@ TOP_PROJECTS = 24
 def vocab_path(out):
     """The vocab sidecar that belongs to this --out, in the same directory."""
     return os.path.join(os.path.dirname(os.path.abspath(out)), VOCAB_NAME)
+
+
+# --- self-redaction setup ----------------------------------------------------
+#
+# stats.json and vocab.json are the two files a user hands to somebody else, so
+# this is the boundary that has to hold. Three things feed it:
+#
+#   * the identities of whoever is running the tool -- account name, git
+#     name/email, the account half of the git remotes ingest saw. A username
+#     has no shape a regex can recognise, so knowing the literal is the only
+#     way to catch `chensagi/finn` in the middle of a sentence.
+#   * the worktree branch names, which ingest discovers while folding a
+#     worktree onto its repo, and which this stage can also recover from the
+#     encoded labels still stored in the event stream.
+#   * whatever the user names with --redact.
+#
+# `project` is the only field carrying a branch name that this stage can see
+# before it starts counting, so it gets a cheap pre-pass of its own. Reading
+# the labels a second time costs a couple of seconds; getting the redaction
+# list only halfway through the corpus would leave the first half published.
+RE_PROJECT = re.compile(rb'"project"\s*:\s*"((?:[^"\\]|\\.)*)"')
+_HEAD = 1000  # `project` is the 4th field an Event writes; never far in
+
+
+def scan_project_labels(path):
+    """Every distinct project label in the stream, without parsing the JSON.
+
+    A full json.loads of a 200 MB corpus twice over would double the runtime
+    of this stage for four bytes of each line.
+    """
+    seen = set()
+    try:
+        with open(path, "rb") as fh:
+            for line in fh:
+                m = RE_PROJECT.search(line[:_HEAD]) or RE_PROJECT.search(line)
+                if not m:
+                    continue
+                raw = m.group(1)
+                if raw in seen:
+                    continue
+                seen.add(raw)
+    except OSError:
+        return []
+    out = []
+    for raw in seen:
+        try:
+            out.append(json.loads(b'"' + raw + b'"'))
+        except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
+            continue
+    return out
+
+
+def load_sidecar(inp):
+    """ingest.py's redact.json, if this corpus has one."""
+    path = os.path.join(os.path.dirname(os.path.abspath(inp)), REDACT_NAME)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError, ValueError):
+        return {}, None
+    if not isinstance(data, dict):
+        return {}, None
+    out = {}
+    for key in ("identities", "branches", "decorated", "explicit"):
+        vals = data.get(key)
+        if isinstance(vals, list):
+            out[key] = [v for v in vals if isinstance(v, str)]
+    return out, path
+
+
+def setup_redaction(args):
+    """Build and install the redactor. Returns (redactor, report, sidecar)."""
+    # normalize_project() records every branch name it decodes into OBSERVED,
+    # so walking the labels is also how the branch list gets built.
+    for label in scan_project_labels(args.inp):
+        normalize_project(label)
+    sidecar, sidecar_path = load_sidecar(args.inp)
+    redactor, report = build_redaction(
+        branch_pairs=OBSERVED.pairs(),
+        extra=list(args.redact),
+        sidecar=sidecar,
+        branch_mode=args.branch_redaction)
+    install_redactor(redactor)
+    return redactor, report, sidecar_path
+
+
+def label_fixer(redactor):
+    """project label -> a label that names no branch and no person.
+
+    Order matters. normalize_project() handles the encoded worktree labels;
+    what is left over is a bare label that may still BE a branch name, because
+    some tools record the worktree directory directly. Those are re-attributed
+    to the repo the branch belongs to when ingest saw the pairing -- which is
+    strictly better than masking, since the events really do belong to that
+    repo -- and masked when it did not.
+    """
+    branch_repo = {b: r for b, r in OBSERVED.pairs() if r}
+
+    def fix(label):
+        p = normalize_project(label)
+        repo = branch_repo.get((p or "").lower())
+        if repo:
+            return repo
+        return redactor.scrub_label(p, LABEL_PLACEHOLDER)
+
+    return fix
 
 
 def local_stamp(ts):
@@ -117,6 +231,14 @@ def main():
     ap.add_argument("--vocab", default=None,
                     help="full-count sidecar; defaults to vocab.json beside --out")
     ap.add_argument("--top", type=int, default=300)
+    ap.add_argument("--redact", action="append", default=[], metavar="STR",
+                    help=REDACT_HELP)
+    ap.add_argument("--branch-redaction", choices=list(BRANCH_MODES),
+                    default="full",
+                    help="how hard to mask worktree branch names in prose: "
+                         "'full' also masks the bare name (default), "
+                         "'decorated' only worktree-<branch> spellings, "
+                         "'off' neither")
     args = ap.parse_args()
     vocab_out = args.vocab or vocab_path(args.out)
 
@@ -129,6 +251,8 @@ def main():
         return 1
 
     t0 = time.time()
+    redactor, redaction, sidecar = setup_redaction(args)
+    fix_label = label_fixer(redactor)
     F = Facets()
     coverage = defaultdict(lambda: {"first": None, "last": None,
                                     "sessions": set(), "months": Counter(),
@@ -160,7 +284,12 @@ def main():
             total += 1
 
             tool = ev.get("tool") or "unknown"
-            project = ev.get("project") or "unknown"
+            # Second line of defence. The adapters now fold a worktree onto its
+            # repo, but events.ndjson stores the label rather than the path, so
+            # a corpus ingested before that fix still carries branch names --
+            # and stats.json is the file that gets shared. Repair them here too
+            # rather than requiring a re-ingest to stop publishing them.
+            project = fix_label(ev.get("project"))
             ts = ev.get("ts") or ""
             day, hour, weekday = local_stamp(ts)
             month = day[:7] if day else "unknown"
@@ -206,18 +335,39 @@ def main():
             if kind == "tool_call":
                 name = ev.get("tool_name") or "unknown"
                 head, sub = command_label(ev.get("cmd"))
+                # A locally written script is named after whatever it does,
+                # and here that was an unreleased feature: `graphify` reached
+                # the shipped commands cloud four times over. The command
+                # clouds are facets like any other and get the same treatment.
+                if head and redactor.hits(head):
+                    head, sub = None, None
+                elif sub and redactor.hits(sub):
+                    sub = None
                 path_text = ev.get("text") or ""
                 m = RE_EXT.search(path_text.strip().split()[-1]) if path_text.strip() else None
+                ext = m.group(1).lower() if m else None
+                if ext and redactor.hits(ext):
+                    ext = None
                 for b in slices:
                     b.tools[name] += 1
                     if head:
                         b.commands[head] += 1
                         if sub:
                             b.commands[sub] += 1
-                    if m:
-                        b.exts[m.group(1).lower()] += 1
+                    if ext:
+                        b.exts[ext] += 1
             elif kind == "error":
-                sig = error_signature(ev.get("text") or "")
+                # error_signature() masks by shape (paths, hosts, hashes); the
+                # literals it cannot recognise -- an owner name in a Vercel
+                # error, a branch name in a HERD_LANE= assignment -- are
+                # exactly what this list is for. Uppercase to match the
+                # signature idiom, where PATH and HOST already mean "masked".
+                raw_sig = error_signature(ev.get("text") or "")
+                sig = redactor.scrub(raw_sig, "REDACTED")
+                if sig is not raw_sig:
+                    # Only when something was actually masked: re-spacing every
+                    # signature would rewrite keys that have nothing to hide.
+                    sig = " ".join(sig.split())
                 if sig:
                     for b in slices:
                         b.errors[sig] += 1
@@ -364,6 +514,9 @@ def main():
     print(f"months covered   {len(months)}  ({months[0] if months else '-'} .. "
           f"{months[-1] if months else '-'})")
     print(f"projects         {stats['totals']['projects']} ({len(top_projects)} with clouds)")
+    print(format_redaction(redaction))
+    if sidecar:
+        print(f"                 (identities and remotes from {sidecar})")
 
     sp = spend_section
     print(f"\nspend (list-price estimate)  ${sp['total_cost']:,.2f} over "

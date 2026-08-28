@@ -17,6 +17,8 @@ import re
 import unicodedata
 from collections import Counter
 
+from .clean import HOSTNAME_TLDS, active_redactor
+
 # Latin: ASCII plus the accented blocks (Latin-1 Supplement through Latin
 # Extended-B, and Latin Extended Additional for Vietnamese).
 _LATIN = "A-Za-z\u00c0-\u024f\u1e00-\u1eff"
@@ -125,12 +127,34 @@ STOPWORDS = BASE_STOP | CHAT_STOP | AGENT_STOP | ROMANCE_STOP | SCRIPT_STOP
 
 RE_HAS_VOWEL = re.compile(r"[aeiouy]")
 
+# Three or more dotted segments: a reverse-DNS bundle id (com.chencorp.finn),
+# a fully-qualified host (mejanreteam.chensagi.com), a dotted module path.
+# None of those are vocabulary and all of them can name a person or a client.
+RE_DOTTED_CHAIN = re.compile(r"^\w+\.\w+\.\w+")
+
 
 def keep(tok: str) -> bool:
     if len(tok) < 3 or len(tok) > 28:
         return False
     if tok in STOPWORDS:
         return False
+    # Addresses and hostnames are identity, not language. The shipped clouds
+    # carried `mejanreteam.chensagi.com` (a personal host), `izs.me` (a THIRD
+    # PARTY's email domain, promoted as a distinctive term), `grok.com` and
+    # `myinstants.com`. The TLD list is curated so `app.py` and `server.ts`
+    # keep working -- see HOSTNAME_TLDS.
+    #
+    # RE_TOKEN cannot currently emit an '@' (an address splits into local part
+    # and domain, and the domain half is what the TLD rule catches); the check
+    # is here so that widening the token class can never quietly ship one.
+    if "@" in tok:
+        return False
+    if "." in tok:
+        head, _, last = tok.rpartition(".")
+        if head and last.lower() in HOSTNAME_TLDS:
+            return False
+        if RE_DOTTED_CHAIN.match(tok):
+            return False
     # The vowel test rejects hashes and identifier soup, and it can only judge
     # Latin script: 'bdika' in Hebrew letters and 'blad' spelled with Polish
     # diacritics carry no aeiouy and are perfectly good words. One non-ASCII
@@ -142,6 +166,15 @@ def keep(tok: str) -> bool:
     # Reject identifier-looking soup: many digits, or long lowercase hex.
     digits = sum(c.isdigit() for c in tok)
     if digits and (len(tok) <= 3 or digits / len(tok) > 0.4):
+        return False
+    # Second boundary for self-redaction. clean_prose() already masked these
+    # out of prose, so in the normal path this never fires -- but keep() is
+    # what decides whether a string becomes vocabulary, and vocab.json is built
+    # straight out of the counters keep() fills. Anything that reaches the
+    # tokenizer by another route (a caller that skipped clean_prose, a phrase
+    # candidate rebuilt from raw tokens) stops here rather than being published.
+    # Cost when no redactor is installed: one attribute lookup.
+    if active_redactor().hits(tok):
         return False
     return True
 

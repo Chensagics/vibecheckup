@@ -4,6 +4,13 @@
 Adapter failures are per-file and non-fatal. Unknown record types are counted
 and reported by name, so a silent upstream format change is visible rather than
 quietly dropping data.
+
+This stage also writes a redaction sidecar next to the corpus. Nothing here is
+masked -- events.ndjson is the local, gitignored source and stays complete --
+but ingest is the only stage that touches the filesystem, so it is the only one
+that can see which repositories the sessions ran in and which worktree branch
+names those paths carry. Those go in the sidecar for analyze.py, which is the
+stage that publishes.
 """
 from __future__ import annotations
 
@@ -16,10 +23,45 @@ from collections import Counter, defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from adapters import ADAPTERS  # noqa: E402
+from adapters.base import OBSERVED, git_config_texts  # noqa: E402
+from wcstats.clean import (REDACT_HELP, build_redaction,  # noqa: E402
+                           format_redaction)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(HERE, "data")
 OUT = os.path.join(DATA, "events.ndjson")
+# Derived from --out, never hard-coded, exactly like analyze.py's vocab
+# sidecar: a scratch run must not overwrite the real one.
+REDACT_NAME = "redact.json"
+
+
+def redact_path(out):
+    """The redaction sidecar that belongs to this --out."""
+    return os.path.join(os.path.dirname(os.path.abspath(out)), REDACT_NAME)
+
+
+def write_redaction(out, extra):
+    """Derive who is running this and what they were branching, and record it.
+
+    Returns the report so the caller can print it. Failing to write the
+    sidecar is a warning, not an error: analyze.py re-derives the local
+    identities itself and recovers branch names from the event stream, so the
+    sidecar only adds the part that needs the filesystem.
+    """
+    _r, report = build_redaction(
+        repo_configs=git_config_texts(OBSERVED.dirs),
+        branch_pairs=OBSERVED.pairs(),
+        extra=extra)
+    path = redact_path(out)
+    payload = {k: report[k] for k in
+               ("identities", "branches", "decorated", "explicit")}
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False, indent=1, sort_keys=True)
+    except OSError as exc:
+        print(f"  warning: could not write {path}: {exc}", file=sys.stderr)
+        return report, None
+    return report, path
 
 
 class Report:
@@ -113,6 +155,8 @@ def main():
     ap.add_argument("--limit", type=int, default=0,
                     help="max files per source (0 = all)")
     ap.add_argument("--out", default=OUT)
+    ap.add_argument("--redact", action="append", default=[], metavar="STR",
+                    help=REDACT_HELP)
     args = ap.parse_args()
 
     os.makedirs(DATA, exist_ok=True)
@@ -183,6 +227,12 @@ def main():
     print(report.render())
     size = os.path.getsize(args.out)
     print(f"\nwrote {args.out} ({size/1e6:.1f} MB) in {time.time()-t0:.1f}s")
+
+    red, red_path = write_redaction(args.out, args.redact)
+    print()
+    print(format_redaction(red))
+    if red_path:
+        print(f"  wrote {red_path} (local only; analyze.py reads it)")
     fatal = report.fatal
     if fatal:
         print(f"\nFATAL: sources found files but parsed none: {', '.join(fatal)}")

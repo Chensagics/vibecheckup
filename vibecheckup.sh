@@ -1,7 +1,8 @@
 #!/usr/bin/env sh
 # vibecheckup — one command from a fresh machine to an open dashboard.
 #
-#   From a checkout:   ./vibecheckup.sh [--demo] [--tool X] [--limit N] [--no-open]
+#   From a checkout:   ./vibecheckup.sh [--demo] [--scrub] [--tool X] [--limit N]
+#                                       [--no-open]
 #   One-liner:         curl -fsSL <raw-url>/vibecheckup.sh | sh
 #
 # Reads the AI coding-session logs already on this machine, analyzes them, and
@@ -28,6 +29,9 @@ vibecheckup — word clouds, spend and Agent Wrapped for your AI coding sessions
 Options:
   --demo            generate a deterministic sample corpus via samples/generate.py
   --force, -f       with --demo, overwrite data/events.ndjson without asking
+  --scrub           also build dashboard-shareable.html: the same page without
+                    project names, error text or shell commands, and open that
+                    one instead. dashboard.html is still written, unchanged.
   --tool NAME       limit ingest to one source (repeatable):
                     claude_code, codex, grok, gemini_cli, antigravity
   --limit N         cap files per source (quick smoke run)
@@ -35,6 +39,8 @@ Options:
   -h, --help        this message
 
 Everything runs locally. Re-run any time to refresh.
+dashboard.html holds your project names and error text -- keep it private, and
+share the --scrub copy instead.
 EOF
 }
 
@@ -142,6 +148,7 @@ ROOT="$SELF_DIR"
 DEMO=0
 FORCE=0
 OPEN=1
+SCRUB=0
 LIMIT=""
 TOOLS=""
 
@@ -160,6 +167,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --demo)     DEMO=1 ;;
     --force|-f) FORCE=1 ;;
+    --scrub)    SCRUB=1 ;;
     --no-open)  OPEN=0 ;;
     --tool)     need_value --tool "$#"; shift; add_tool "$1" ;;
     --tool=*)   add_tool "${1#--tool=}" ;;
@@ -224,19 +232,39 @@ else
 fi
 
 stage "analyze (events -> data/stats.json)" python3 "$ROOT/analyze.py"
-stage "build (stats + template -> dashboard.html)" python3 "$ROOT/build_dashboard.py"
 
 DASH="$ROOT/dashboard.html"
+SHARE="$ROOT/dashboard-shareable.html"
+
+if [ "$SCRUB" = "1" ]; then
+  stage "build (stats + template -> dashboard.html + dashboard-shareable.html)" \
+    python3 "$ROOT/build_dashboard.py" --scrub
+  [ -f "$SHARE" ] || die "expected $SHARE to exist after the build"
+else
+  stage "build (stats + template -> dashboard.html)" python3 "$ROOT/build_dashboard.py"
+fi
+
 [ -f "$DASH" ] || die "expected $DASH to exist after the build"
 
 printf '\n✓ vibecheckup is ready: %s\n' "$DASH"
+printf '  Keep that file private: it carries your project names and error text.\n'
+
+# --scrub is a request to inspect the copy you are about to hand over, so that
+# is the one that opens. dashboard.html is written either way.
+TO_OPEN="$DASH"
+if [ "$SCRUB" = "1" ]; then
+  printf '\n  share copy: %s\n' "$SHARE"
+  printf '  No project names, error text or shell commands — but the clouds are\n'
+  printf '  still your own words, so read them before you hand it over.\n'
+  TO_OPEN="$SHARE"
+fi
 
 if [ "$OPEN" = "1" ]; then
   case "$(uname -s)" in
-    Darwin) open "$DASH" ;;
+    Darwin) open "$TO_OPEN" ;;
     Linux)
       if command -v xdg-open >/dev/null 2>&1; then
-        xdg-open "$DASH" >/dev/null 2>&1 &
+        xdg-open "$TO_OPEN" >/dev/null 2>&1 &
       else
         printf '  (no xdg-open found — open the file above in a browser)\n'
       fi ;;
