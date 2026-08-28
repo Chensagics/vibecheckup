@@ -1,4 +1,4 @@
-"""Bootstrap tests: the demo corpus generator and vibecheck.sh.
+"""Bootstrap tests: the demo corpus generator and vibecheckup.sh.
 
 Never touches real session data or the repo's data/ directory -- the generator
 is always pointed at a temporary file.
@@ -19,7 +19,7 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 GENERATOR = os.path.join(ROOT, "samples", "generate.py")
-SCRIPT = os.path.join(ROOT, "vibecheck.sh")
+SCRIPT = os.path.join(ROOT, "vibecheckup.sh")
 sys.path.insert(0, ROOT)
 
 from adapters.base import Event  # noqa: E402
@@ -136,7 +136,7 @@ class TestDeterminism(unittest.TestCase):
             self.assertEqual(generate(out, "--days", "2").returncode, 2)
 
 
-class TestVibecheckScript(unittest.TestCase):
+class TestVibecheckupScript(unittest.TestCase):
     def sh(self, *args, **kw):
         return subprocess.run(["sh", SCRIPT, *args], capture_output=True,
                               text=True, stdin=subprocess.DEVNULL, timeout=60, **kw)
@@ -190,7 +190,7 @@ JUNK_PY = '#!/bin/sh\necho "banana"\n'
 
 
 class TestPythonProbe(unittest.TestCase):
-    """vibecheck must name the problem itself, never hand over a traceback."""
+    """vibecheckup must name the problem itself, never hand over a traceback."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -304,11 +304,11 @@ class TestCurlPipeBootstrap(unittest.TestCase):
         os.chmod(curl, 0o755)
 
     def build_tarball(self):
-        """A stand-in repo: the real vibecheck.sh plus stubs for the stages."""
+        """A stand-in repo: the real vibecheckup.sh plus stubs for the stages."""
         stage = os.path.join(self.tmp.name, "stage", "repo")
         os.makedirs(os.path.join(stage, "adapters"))
         os.makedirs(os.path.join(stage, "wcstats"))
-        shutil.copy(SCRIPT, os.path.join(stage, "vibecheck.sh"))
+        shutil.copy(SCRIPT, os.path.join(stage, "vibecheckup.sh"))
         # The checkout sentinel: both files must be present for a directory to
         # count as a checkout.
         with open(os.path.join(stage, "adapters", "base.py"), "w") as fh:
@@ -326,7 +326,7 @@ class TestCurlPipeBootstrap(unittest.TestCase):
     def pipe(self, *args):
         env = dict(os.environ)
         env["PATH"] = self.bin + os.pathsep + env.get("PATH", "")
-        env["VIBECHECK_HOME"] = self.prefix
+        env["VIBECHECKUP_HOME"] = self.prefix
         with open(SCRIPT, "rb") as fh:
             return subprocess.run(["/bin/sh", "-s", "--", *args], stdin=fh,
                                   capture_output=True, text=True, cwd=self.cwd,
@@ -342,7 +342,7 @@ class TestCurlPipeBootstrap(unittest.TestCase):
         proc = self.pipe("--no-open")
         self.assertIn("no checkout here", proc.stdout)
         self.assertIn("BOOTSTRAP_INGEST_RAN", proc.stdout)
-        self.assertTrue(os.path.isfile(os.path.join(self.prefix, "vibecheck.sh")))
+        self.assertTrue(os.path.isfile(os.path.join(self.prefix, "vibecheckup.sh")))
 
     def test_nothing_is_written_into_the_users_directory(self):
         self.pipe("--no-open")
@@ -351,7 +351,7 @@ class TestCurlPipeBootstrap(unittest.TestCase):
     def test_a_real_checkout_carries_both_sentinel_files(self):
         for rel in ("ingest.py", "adapters/base.py", "wcstats/prices.json"):
             self.assertTrue(os.path.isfile(os.path.join(ROOT, *rel.split("/"))),
-                            f"{rel} is the checkout sentinel vibecheck.sh looks for")
+                            f"{rel} is the checkout sentinel vibecheckup.sh looks for")
 
 
 # --- ingest safety ------------------------------------------------------------

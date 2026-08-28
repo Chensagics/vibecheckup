@@ -1,8 +1,8 @@
 <div align="center">
 
-# vibecheck
+# vibecheckup
 
-**A local vibecheck on your AI coding year.**
+**A local vibecheckup on your AI coding year.**
 
 One command reads the session logs already on your machine — Claude Code, Codex,
 Grok CLI, Gemini CLI, Antigravity — and builds a single self-contained
@@ -16,7 +16,7 @@ Nothing is installed, nothing is uploaded, `python3` is the only requirement.
 ![Works offline](https://img.shields.io/badge/works-offline-a371f7.svg)
 
 <!-- assets/wrapped-card.png — the Agent Wrapped share card, generated from
-     `./vibecheck.sh --demo` so it contains no real vocabulary. -->
+     `./vibecheckup.sh --demo` so it contains no real vocabulary. -->
 <img src="assets/wrapped-card.png" alt="Agent Wrapped — the downloadable share card" width="420">
 
 </div>
@@ -32,7 +32,7 @@ an AI this year, how many prompts and sessions, your top words and top phrase,
 your peak hour and weekday, your longest streak and busiest day, how often you
 said *please*, which tool you actually live in, what it would have cost. It ends
 on a share card drawn to a `<canvas>` with a **Download PNG** button — branded
-`VIBECHECK ⚡ AGENT WRAPPED 2026`, with **no directory names and no file
+`VIBECHECKUP ⚡ AGENT WRAPPED 2026`, with **no directory names and no file
 paths — but the words are yours**, lifted straight from your prompts, so read
 them before posting. Tap any word on the card to drop it and the next one moves
 up. Slides whose stat is missing are skipped, not faked.
@@ -54,24 +54,24 @@ rate, cost per day, spend by model and by tool. Grok CLI and Antigravity log no
 usage at all and are badged **no usage data** instead of being counted as zero.
 
 <!-- assets/dashboard.png — the Lexicon and Spend tabs, generated from
-     `./vibecheck.sh --demo` so it contains no real vocabulary. -->
-<img src="assets/dashboard.png" alt="vibecheck — word clouds and spend" width="860">
+     `./vibecheckup.sh --demo` so it contains no real vocabulary. -->
+<img src="assets/dashboard.png" alt="vibecheckup — word clouds and spend" width="860">
 
 ## Run it
 
 **One line.** No clone, no pip, no dependencies — it fetches the repo into
-`~/.vibecheck` and runs there:
+`~/.vibecheckup` and runs there:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/chensagics/vibecheck/main/vibecheck.sh | sh
+curl -fsSL https://raw.githubusercontent.com/chensagics/vibecheckup/main/vibecheckup.sh | sh
 ```
 
-> The raw URL above points at `chensagics/vibecheck` — **the final public repo
-> path**. If you fork or rename, override it with `VIBECHECK_REPO=owner/name`.
+> The raw URL above points at `chensagics/vibecheckup` — **the final public repo
+> path**. If you fork or rename, override it with `VIBECHECKUP_REPO=owner/name`.
 
 ### Or let your agent do it
 
-vibecheck turns the session logs your AI coding tools already keep on this
+vibecheckup turns the session logs your AI coding tools already keep on this
 machine into one local dashboard — what you actually ask AI for, when you work,
 what it would cost, and a shareable card of your year.
 
@@ -80,8 +80,8 @@ drive. It will read the docs, explain the tool to you, and set it up once you
 agree.
 
 ```text
-Read https://github.com/chensagics/vibecheck. Before running anything, tell me
-in your own words what vibecheck does, what it reads, and where my data goes,
+Read https://github.com/chensagics/vibecheckup. Before running anything, tell me
+in your own words what vibecheckup does, what it reads, and where my data goes,
 then ask if I want to proceed. If I say yes, install and run it, then read the
 stats it generates and tell me what a year of my prompts says about me.
 ```
@@ -94,8 +94,8 @@ the same questions without it.
 From a checkout:
 
 ```bash
-./vibecheck.sh            # ingest -> analyze -> build -> open dashboard.html
-./vibecheck.sh --demo     # a synthetic corpus instead: no real logs needed
+./vibecheckup.sh            # ingest -> analyze -> build -> open dashboard.html
+./vibecheckup.sh --demo     # a synthetic corpus instead: no real logs needed
 ```
 
 Re-run any time to refresh; there is no cache to go stale. A full run re-reads
@@ -110,8 +110,8 @@ everything — a few thousand files in well under a minute.
 | `--no-open` | Build the dashboard but don't open a browser. |
 | `-h`, `--help` | Usage. Answered before anything is downloaded, so `curl … \| sh -s -- --help` costs nothing. |
 
-Environment: `VIBECHECK_REPO` / `VIBECHECK_BRANCH` (what the one-liner fetches)
-and `VIBECHECK_HOME` (where it lands, default `~/.vibecheck`).
+Environment: `VIBECHECKUP_REPO` / `VIBECHECKUP_BRANCH` (what the one-liner fetches)
+and `VIBECHECKUP_HOME` (where it lands, default `~/.vibecheckup`).
 
 The script is a thin wrapper over three stages you can also run yourself:
 
@@ -245,7 +245,7 @@ in the dashboard.
 ## Layout
 
 ```
-vibecheck.sh        bootstrap: check python3, run the three stages, open the page
+vibecheckup.sh        bootstrap: check python3, run the three stages, open the page
 ingest.py  analyze.py  build_dashboard.py  dashboard_template.html
 adapters/   base.py protoscan.py claude_code.py codex.py grok.py
             gemini_cli.py antigravity.py
@@ -265,7 +265,7 @@ so the dashboard loads instantly.
 
 ```bash
 python3 -m unittest discover -s tests   # fixtures only, no network
-./vibecheck.sh --demo --no-open         # full pipeline on synthetic data
+./vibecheckup.sh --demo --no-open         # full pipeline on synthetic data
 ```
 
 **161 tests on a fresh clone, 180 once you have built a dashboard.** The
@@ -292,7 +292,7 @@ Inspired by [**ccusage**](https://github.com/ryoppippi/ccusage) by
 [@ryoppippi](https://github.com/ryoppippi), which showed that local agent logs
 are enough to answer the spend question, and by the Spotify Wrapped format,
 which showed that a year of data is worth more as a story than as a table.
-vibecheck computes its own estimates natively in Python and bundles neither.
+vibecheckup computes its own estimates natively in Python and bundles neither.
 
 ## License
 

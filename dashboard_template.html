@@ -2,7 +2,7 @@
 <html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>vibecheck</title>
+<title>vibecheckup</title>
 <style>
 :root{
   color-scheme: light;
@@ -340,7 +340,7 @@ footer{margin-top:44px;padding-top:18px;border-top:1px solid var(--rule);
 <div class="wrap">
 <header>
   <p class="eyebrow" id="eyebrow">—</p>
-  <h1>vibecheck<br><em>what I actually asked for</em></h1>
+  <h1>vibecheckup<br><em>what I actually asked for</em></h1>
   <p class="lede">Every local AI coding session on this machine, read end to end and
     reduced to the words that were really typed — with the machine's own boilerplate
     stripped out, so the clouds show vocabulary rather than scaffolding.</p>
@@ -1368,7 +1368,7 @@ function wrBuild(){
   const pricey = wsp.priciest_day || null;
 
   out.push(wrS('open', [
-    wrK('Vibecheck ⚡ Agent Wrapped'),
+    wrK('Vibecheckup ⚡ Agent Wrapped'),
     wrBg('Your AI year'),
     win.start ? wrMd(`${wrDate(win.start)} → ${wrDate(win.end)}`) : null,
     wrSb('Everything you typed to an AI on this machine, read back to you.'),
@@ -1550,7 +1550,7 @@ function wrDownload(e){
     Number(String((w.window||{}).end||'').slice(0,4)) || new Date().getFullYear();
   const grab = url => {
     const a = el('a'); a.href = url;
-    a.download = `vibecheck-wrapped-${year}.png`;
+    a.download = `vibecheckup-wrapped-${year}.png`;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => { try { URL.revokeObjectURL(url); } catch(err){} }, 4000);
   };
@@ -1651,7 +1651,7 @@ function wrDrawCard(cv){
   const year = Number(w.year) ||
     Number(String(win.end||'').slice(0,4)) || new Date().getFullYear();
   let bx = PAD;
-  bx += T('VIBECHECK', {x:bx, y:128, size:24, fam:mono, weight:500, track:.18, color:ink}).w;
+  bx += T('VIBECHECKUP', {x:bx, y:128, size:24, fam:mono, weight:500, track:.18, color:ink}).w;
   bx += T(' ⚡ ', {x:bx, y:128, size:24, fam:mono, weight:500, color:ink3}).w;
   T('AGENT WRAPPED', {x:bx, y:128, size:24, fam:mono, weight:500, track:.18, color:ink3});
   T(String(year), {x:W-PAD, y:128, size:24, fam:mono, weight:500, track:.1,

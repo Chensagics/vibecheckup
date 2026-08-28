@@ -77,7 +77,7 @@ class ScratchCase(unittest.TestCase):
     """A throwaway directory per test, removed afterwards."""
 
     def scratch(self):
-        tmp = tempfile.mkdtemp(prefix="vibecheck-test-")
+        tmp = tempfile.mkdtemp(prefix="vibecheckup-test-")
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         return tmp
 
@@ -270,7 +270,7 @@ class TestTokenlessCorpusStillBuilds(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.tmp = tempfile.mkdtemp(prefix="vibecheck-test-")
+        cls.tmp = tempfile.mkdtemp(prefix="vibecheckup-test-")
         cls.addClassCleanup(shutil.rmtree, cls.tmp, ignore_errors=True)
         events = [event("2026-08-01T22:30:00+00:00", "ok thanks"),
                   event("2026-08-01T23:10:00+00:00", "yes please"),

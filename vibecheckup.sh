@@ -1,8 +1,8 @@
 #!/usr/bin/env sh
-# vibecheck — one command from a fresh machine to an open dashboard.
+# vibecheckup — one command from a fresh machine to an open dashboard.
 #
-#   From a checkout:   ./vibecheck.sh [--demo] [--tool X] [--limit N] [--no-open]
-#   One-liner:         curl -fsSL <raw-url>/vibecheck.sh | sh
+#   From a checkout:   ./vibecheckup.sh [--demo] [--tool X] [--limit N] [--no-open]
+#   One-liner:         curl -fsSL <raw-url>/vibecheckup.sh | sh
 #
 # Reads the AI coding-session logs already on this machine, analyzes them, and
 # opens a single self-contained dashboard.html. Python 3 is the only
@@ -12,18 +12,18 @@
 set -eu
 
 # Must match the public GitHub repo (owner/name) that serves this script.
-GH_REPO="${VIBECHECK_REPO:-chensagics/vibecheck}"
-GH_BRANCH="${VIBECHECK_BRANCH:-main}"
-PREFIX="${VIBECHECK_HOME:-$HOME/.vibecheck}"
+GH_REPO="${VIBECHECKUP_REPO:-chensagics/vibecheckup}"
+GH_BRANCH="${VIBECHECKUP_BRANCH:-main}"
+PREFIX="${VIBECHECKUP_HOME:-$HOME/.vibecheckup}"
 
-die() { printf 'vibecheck: %s\n' "$1" >&2; exit "${2:-1}"; }
+die() { printf 'vibecheckup: %s\n' "$1" >&2; exit "${2:-1}"; }
 
 usage() {
   cat <<'EOF'
-vibecheck — word clouds, spend and Agent Wrapped for your AI coding sessions.
+vibecheckup — word clouds, spend and Agent Wrapped for your AI coding sessions.
 
-  ./vibecheck.sh                 ingest real logs, analyze, build, open
-  ./vibecheck.sh --demo          use a synthetic corpus instead (no real logs)
+  ./vibecheckup.sh                 ingest real logs, analyze, build, open
+  ./vibecheckup.sh --demo          use a synthetic corpus instead (no real logs)
 
 Options:
   --demo            generate a deterministic sample corpus via samples/generate.py
@@ -65,7 +65,7 @@ py_install_hint() {
 # installs.
 PY_VERSION="$(python3 -V 2>/dev/null)" || PY_VERSION=""
 if [ -z "$PY_VERSION" ]; then
-  echo "vibecheck: python3 (3.9+) is required, but there is no working python3 on your PATH." >&2
+  echo "vibecheckup: python3 (3.9+) is required, but there is no working python3 on your PATH." >&2
   py_install_hint
   exit 1
 fi
@@ -76,12 +76,12 @@ PY_MINOR="${PY_NUM#*.}"
 PY_MINOR="${PY_MINOR%%.*}"
 case "$PY_MAJOR:$PY_MINOR" in
   *[!0-9:]*|:*|*:)
-    echo "vibecheck: python3 (3.9+) is required, but 'python3 -V' printed '$PY_VERSION', which is not a version I can read." >&2
+    echo "vibecheckup: python3 (3.9+) is required, but 'python3 -V' printed '$PY_VERSION', which is not a version I can read." >&2
     py_install_hint
     exit 1 ;;
 esac
 if [ "$PY_MAJOR" -lt 3 ] || { [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 9 ]; }; then
-  echo "vibecheck: the python3 on your PATH is $PY_NUM, but vibecheck needs 3.9+ — install a newer Python 3 and re-run." >&2
+  echo "vibecheckup: the python3 on your PATH is $PY_NUM, but vibecheckup needs 3.9+ — install a newer Python 3 and re-run." >&2
   py_install_hint
   exit 1
 fi
@@ -99,7 +99,7 @@ is_checkout() {
 # "$0" is only a path when it has a slash in it. Piped to sh (`curl ... | sh`)
 # it is just "sh", and dirname would hand back "." -- wherever the user happens
 # to be standing, which is nobody's checkout. Without a slash it can still be
-# `sh vibecheck.sh` run from inside one, which a file of that name next to a
+# `sh vibecheckup.sh` run from inside one, which a file of that name next to a
 # real checkout tells apart.
 case "$0" in
   */*) SELF_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd || echo "")" ;;
@@ -108,14 +108,14 @@ esac
 
 fetch_repo() {
   # curl | sh path: no checkout next to us, so download the tarball.
-  if [ "${VIBECHECK_BOOTSTRAPPED:-0}" = "1" ]; then
+  if [ "${VIBECHECKUP_BOOTSTRAPPED:-0}" = "1" ]; then
     die "bootstrap ran twice — $PREFIX looks incomplete, remove it and retry"
   fi
   url="https://codeload.github.com/$GH_REPO/tar.gz/refs/heads/$GH_BRANCH"
-  printf 'vibecheck: no checkout here, fetching %s -> %s\n' "$GH_REPO" "$PREFIX"
+  printf 'vibecheckup: no checkout here, fetching %s -> %s\n' "$GH_REPO" "$PREFIX"
   command -v tar >/dev/null 2>&1 || die "tar is required to unpack the download"
   mkdir -p "$PREFIX"
-  tgz="$PREFIX/.vibecheck-download.tar.gz"
+  tgz="$PREFIX/.vibecheckup-download.tar.gz"
   if command -v curl >/dev/null 2>&1; then
     curl -fsSL "$url" -o "$tgz" || die "download failed: $url"
   elif command -v wget >/dev/null 2>&1; then
@@ -126,14 +126,14 @@ fetch_repo() {
   tar -xzf "$tgz" -C "$PREFIX" --strip-components=1 || die "could not unpack $tgz"
   rm -f "$tgz"
   is_checkout "$PREFIX" ||
-    die "the download does not look like vibecheck — check GH_REPO=$GH_REPO"
+    die "the download does not look like vibecheckup — check GH_REPO=$GH_REPO"
 }
 
 if ! is_checkout "$SELF_DIR"; then
   fetch_repo
-  VIBECHECK_BOOTSTRAPPED=1
-  export VIBECHECK_BOOTSTRAPPED
-  exec sh "$PREFIX/vibecheck.sh" "$@"
+  VIBECHECKUP_BOOTSTRAPPED=1
+  export VIBECHECKUP_BOOTSTRAPPED
+  exec sh "$PREFIX/vibecheckup.sh" "$@"
 fi
 ROOT="$SELF_DIR"
 
@@ -166,7 +166,7 @@ while [ $# -gt 0 ]; do
     --limit)    need_value --limit "$#"; shift; LIMIT="$1" ;;
     --limit=*)  LIMIT="${1#--limit=}" ;;
     -h|--help)  usage; exit 0 ;;
-    *)          printf 'vibecheck: unknown option %s\n\n' "$1" >&2
+    *)          printf 'vibecheckup: unknown option %s\n\n' "$1" >&2
                 usage >&2; exit 2 ;;
   esac
   shift
@@ -187,7 +187,7 @@ stage() { # stage <label> <command...>
   rc=0                      # not `status`: zsh reserves that name
   "$@" || rc=$?
   if [ "$rc" -ne 0 ]; then
-    printf '\nvibecheck: %s failed (exit %s).\n' "$label" "$rc" >&2
+    printf '\nvibecheckup: %s failed (exit %s).\n' "$label" "$rc" >&2
     printf 'Nothing further was run — the output above shows what went wrong.\n' >&2
     exit 1
   fi
@@ -198,7 +198,7 @@ mkdir -p "$ROOT/data"   # a fresh tarball has no data/ (it is gitignored)
 
 if [ "$DEMO" = "1" ]; then
   if [ -f "$EVENTS" ] && [ "$FORCE" != "1" ]; then
-    printf 'vibecheck: %s already exists and --demo will replace it\n' "$EVENTS" >&2
+    printf 'vibecheckup: %s already exists and --demo will replace it\n' "$EVENTS" >&2
     printf '           with synthetic data (your real ingest is one re-run away).\n' >&2
     if [ -t 0 ]; then
       printf '           overwrite? [y/N] ' >&2
@@ -229,7 +229,7 @@ stage "build (stats + template -> dashboard.html)" python3 "$ROOT/build_dashboar
 DASH="$ROOT/dashboard.html"
 [ -f "$DASH" ] || die "expected $DASH to exist after the build"
 
-printf '\n✓ vibecheck is ready: %s\n' "$DASH"
+printf '\n✓ vibecheckup is ready: %s\n' "$DASH"
 
 if [ "$OPEN" = "1" ]; then
   case "$(uname -s)" in

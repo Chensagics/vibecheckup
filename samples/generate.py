@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic synthetic corpus for `vibecheck.sh --demo`.
+"""Deterministic synthetic corpus for `vibecheckup.sh --demo`.
 
 Writes a data/events.ndjson that looks like a real six-month multi-tool
 history without touching (or resembling) anyone's actual logs: fake project
@@ -13,7 +13,7 @@ NDJSON -- so README screenshots and demo runs are reproducible.
     python3 samples/generate.py --seed 7 --events 4000
 
 Event fields mirror adapters/base.py:Event, plus the `model` and `usage`
-fields from the vibecheck design contract (section 4):
+fields from the vibecheckup design contract (section 4):
 usage = {"input", "output", "cache_read", "cache_write"}.
 """
 from __future__ import annotations

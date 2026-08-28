@@ -139,7 +139,7 @@ def main():
             print(f"\nno session logs found — none of the {len(ADAPTERS)} "
                   f"supported tools ({', '.join(ADAPTERS)}) has session logs "
                   f"on this machine.")
-        print("try the synthetic corpus instead:  ./vibecheck.sh --demo")
+        print("try the synthetic corpus instead:  ./vibecheckup.sh --demo")
         return 1
 
     warn_partial(args, report)

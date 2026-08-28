@@ -28,7 +28,7 @@ TEXT_CAP = 200_000
 
 
 # No slots=True: that argument arrived in 3.10, and macOS ships 3.9.6 with the
-# Command Line Tools -- which is exactly the Python vibecheck.sh tells people to
+# Command Line Tools -- which is exactly the Python vibecheckup.sh tells people to
 # install. The memory it saved is not worth failing at import on a stock Mac.
 @dataclass
 class Event:
