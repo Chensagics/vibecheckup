@@ -762,5 +762,138 @@ class TestDashboardBuild(unittest.TestCase):
         self.assertEqual(hosts, set(), f"unexpected external hosts: {hosts}")
 
 
+class TestInlinedDataCannotEscapeTheScriptBlock(unittest.TestCase):
+    """A tool error, a shell command or a project name can carry an HTML
+    snippet, and the browser's script-data state machine is unforgiving: an
+    "<!--" puts the parser in escaped state, a following "<script" in
+    double-escaped state, and from there the template's own "</script>" closes
+    nothing. The data block swallows the rest of the document, no tab renders,
+    and there is no error anywhere -- just a header above a blank page.
+
+    Escaping "</" alone does not stop it. Escaping every "<" does."""
+
+    PAYLOAD = '<!--<script>alert(1)</script> Error: cannot open thing'
+
+    @staticmethod
+    def _stats(payload):
+        return {"schema_version": 2,
+                "coverage": {}, "activity": {},
+                "totals": {"sessions": 1, "prompts": 1},
+                "clouds": {"by_project": {},
+                           "global": {"errors": [{"t": payload, "n": 1}],
+                                      "commands": [{"t": payload, "n": 1}]}}}
+
+    def _build(self, payload):
+        """Run the real builder against the real template, into a temp dir."""
+        import contextlib
+        import io
+        import tempfile
+        import build_dashboard as bd
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "stats.json")
+            out = os.path.join(d, "dashboard.html")
+            with open(src, "w", encoding="utf-8") as fh:
+                json.dump(self._stats(payload), fh)
+            keep = (bd.STATS, bd.OUT)
+            bd.STATS, bd.OUT = src, out
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(bd.main(), 0)
+                with open(out, encoding="utf-8") as fh:
+                    return fh.read()
+            finally:
+                bd.STATS, bd.OUT = keep
+
+    @staticmethod
+    def _payload_block(html):
+        import re
+        m = re.search(r'<script id="statsdata" type="application/json">'
+                      r'(.*?)</script>', html, re.S)
+        assert m, "inlined stats block missing"
+        return m.group(1)
+
+    def test_comment_open_before_a_script_tag_never_reaches_the_page(self):
+        html = self._build(self.PAYLOAD)
+        self.assertNotIn("<!--<script", html)
+        self.assertNotIn("<!--", html[html.index("statsdata"):])
+
+    def test_no_raw_angle_bracket_survives_in_the_data_block(self):
+        """One rule, no exceptions: "<" cannot appear in the payload at all,
+        so no sequence of it can move the parser out of script-data."""
+        self.assertNotIn("<", self._payload_block(self._build(self.PAYLOAD)))
+
+    def test_the_page_still_owns_exactly_its_own_two_script_blocks(self):
+        """document.scripts.length was 1 with the old escaping: the data block
+        never closed, so the code block was never parsed as script."""
+        html = self._build(self.PAYLOAD)
+        self.assertEqual(html.count("<script"), 2)
+        self.assertEqual(html.count("</script>"), 2)
+
+    def test_payload_round_trips_through_json_parse(self):
+        """The escaping uses the one JSON already defines for "<", and "<"
+        only ever occurs inside a JSON string, so the reader gets the text
+        back byte for byte."""
+        block = self._payload_block(self._build(self.PAYLOAD))
+        data = json.loads(block)                    # no un-escaping first
+        self.assertEqual(data["clouds"]["global"]["errors"][0]["t"],
+                         self.PAYLOAD)
+        self.assertEqual(data["clouds"]["global"]["commands"][0]["t"],
+                         self.PAYLOAD)
+
+    def test_the_older_closing_tag_break_out_is_still_covered(self):
+        payload = 'fine until </script><script>alert(2)</script>'
+        html = self._build(payload)
+        self.assertNotIn("</script><script>", html)
+        self.assertEqual(
+            json.loads(self._payload_block(html))["clouds"]["global"]["errors"][0]["t"],
+            payload)
+
+    def test_built_page_is_not_in_quirks_mode(self):
+        """No doctype means compatMode "BackCompat" -- a different box model
+        under the same CSS."""
+        html = self._build("ordinary text")
+        self.assertTrue(html.startswith("<!DOCTYPE html>"), html[:40])
+        self.assertIn('<html lang="en">', html[:80])
+        self.assertIn('charset="utf-8"', html[:1024])
+
+
+class TestTemplateContract(unittest.TestCase):
+    """Properties of the template itself, so they hold on a fresh clone --
+    before anything has been ingested, analysed or built."""
+
+    @classmethod
+    def setUpClass(cls):
+        with open(os.path.join(ROOT, "dashboard_template.html"),
+                  encoding="utf-8") as fh:
+            cls.t = fh.read()
+
+    def test_doctype_and_language_lead_the_file(self):
+        self.assertTrue(self.t.startswith('<!DOCTYPE html>\n<html lang="en">'),
+                        self.t[:40])
+
+    def test_share_card_footnote_asks_for_a_read_not_reassurance(self):
+        """The card carries no project names -- but the words on it are the
+        reader's own prose, so the footnote must prompt a check."""
+        self.assertIn("Read them before you post", self.t)
+        self.assertNotIn("counts and vocabulary only", self.t)
+
+    def test_card_words_can_be_dropped(self):
+        for probe in ("wrEx", "wrCardWords", "wr-chip", "Tap to drop"):
+            self.assertIn(probe, self.t, probe)
+
+    def test_the_card_draws_only_the_words_that_were_kept(self):
+        """wrDrawCard reading wrWords() again would put a dropped word
+        straight back onto the canvas -- and into the downloaded PNG."""
+        body = self.t[self.t.index("function wrDrawCard("):
+                      self.t.index("\nlet wrPainted")]
+        self.assertIn("wrCardWords()", body)
+        self.assertNotIn("wrWords()", body)
+
+    def test_spend_cell_says_what_the_estimate_is_made_of(self):
+        """"SPEND (EST.)" alone reads as a bill once the card is a JPEG on
+        somebody else's timeline."""
+        self.assertIn("list prices · not a bill", self.t)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

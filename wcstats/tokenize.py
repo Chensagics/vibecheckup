@@ -1,10 +1,45 @@
-"""Tokenization, stopwords, phrase detection, and near-duplicate clustering."""
+"""Tokenization, stopwords, phrase detection, and near-duplicate clustering.
+
+Unicode-aware by construction: an ASCII-only tokenizer does not merely lose
+non-English prose, it mangles it. 'función' comes back as 'funci' and a Hebrew
+or Arabic corpus comes back empty, which used to abort the whole run.
+
+The one script family this still cannot do properly is the one written without
+spaces. Chinese and Japanese tokenize as whole runs rather than words -- we
+ship no segmentation dictionary -- so a repeated phrase clusters as one term
+and a longer run falls past the 28-character cap in keep() and drops out.
+Such a corpus can legitimately yield no tokens at all, which analyze.py warns
+about rather than treating as fatal.
+"""
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections import Counter
 
-RE_TOKEN = re.compile(r"[a-zA-Z][a-zA-Z0-9_+#'\.\-]*")
+# Latin: ASCII plus the accented blocks (Latin-1 Supplement through Latin
+# Extended-B, and Latin Extended Additional for Vietnamese).
+_LATIN = "A-Za-z\u00c0-\u024f\u1e00-\u1eff"
+# Combining marks are NOT \w, so they have to be named explicitly or the letter
+# they sit on ends the token: NFD 'función' would tokenize as 'funcio' + 'n',
+# and a vowelled Hebrew or Arabic word would shatter at every point.
+_MARK = ("\u0300-\u036f"          # Latin/Greek/Cyrillic diacritics (NFD)
+         "\u0591-\u05c7"          # Hebrew points and cantillation
+         "\u0610-\u061a\u064b-\u065f\u0670")  # Arabic harakat
+# A letter in any script that is not Latin: Hebrew, Arabic, Cyrillic, Greek,
+# Devanagari, CJK...
+_OTHER = f"[^\\W\\d_{_LATIN}]"
+
+RE_TOKEN = re.compile(
+    # A Latin word, keeping the tails this corpus depends on: c++, .py,
+    # don't, e-mail. Digits and underscores still cannot open a token, so
+    # `12` and `_tmp` behave exactly as they always did.
+    f"[{_LATIN}][{_LATIN}{_MARK}0-9_+#'.\\-]*"
+    # ...or a run in another script. Deliberately a separate alternative:
+    # matching one class across both would glue the stray 'n' of an unescaped
+    # \n onto the Arabic word after it.
+    f"|{_OTHER}(?:{_OTHER}|[{_MARK}'\\-])*"
+)
 
 # Standard English function words.
 BASE_STOP = set("""
@@ -60,9 +95,33 @@ estas todo toda todos todas muy sus sin sobre desde hasta cuando donde porque
 entre segun tambien solo ahora aqui ese esa eso les nos ustedes ellos ellas
 das dos das nao uma nas nos pelo pela isso essa esse
 les des une aux dans pour avec sont est ete cette leur leurs mais ont
+más está están también sólo después aquí cómo dónde cuándo qué según
+não você vocês até então já só são
+où très même déjà être été
 """.split())
 
-STOPWORDS = BASE_STOP | CHAT_STOP | AGENT_STOP | ROMANCE_STOP
+# Once the tokenizer stopped being ASCII-only, the same thing that happened to
+# Spanish happened to every other script in the corpus: the most frequent
+# "words" turned out to be prepositions and pronouns, and two Arabic
+# prepositions landed on the share card. Same rule as ROMANCE_STOP -- function
+# words only, deliberately short and high-confidence. Content words in these
+# languages are exactly the signal we just recovered and they stay.
+SCRIPT_STOP = set("""
+على إلى هذا هذه ذلك تلك التي الذي الذين هؤلاء هو هي هم أنا انا نحن أنت انت
+كان كانت يكون تكون ليس ليست وليس ولا لكن ولكن أو او أن ان إن إذا اذا
+عندما بعد قبل خلال حتى منذ بينما لأن لان لقد كل بعض هل نعم فقط أيضا ايضا
+الآن الان جدا عند عليه عليها بها لها منه منها فيه فيها كذلك حول بين دون
+غير سوف يجب يمكن يمكنك مثل أكثر اكثر أقل اقل واحد واحدة مما نحو الـ إنه انه
+دائما مرة شيء أخرى تزال يزال بشكل
+זאת אני אתה הוא היא אנחנו אתם הם הן אבל איך למה מתי איפה כאן
+היה היתה הייתה להיות יהיה עוד כבר כמו אחרי לפני בין תודה בבקשה
+צריך אפשר יותר פחות מאוד עכשיו הזה הזאת שלי שלך שלנו כדי אשר ולא וגם
+что это как или для так все всё был была были быть если когда где кто
+тот эта этот эти они она мне тебе нам его её их там тут уже еще ещё
+только очень надо нужно можно чтобы потому также тоже нет меня тебя себя
+""".split())
+
+STOPWORDS = BASE_STOP | CHAT_STOP | AGENT_STOP | ROMANCE_STOP | SCRIPT_STOP
 
 RE_HAS_VOWEL = re.compile(r"[aeiouy]")
 
@@ -72,7 +131,11 @@ def keep(tok: str) -> bool:
         return False
     if tok in STOPWORDS:
         return False
-    if not RE_HAS_VOWEL.search(tok):
+    # The vowel test rejects hashes and identifier soup, and it can only judge
+    # Latin script: 'bdika' in Hebrew letters and 'blad' spelled with Polish
+    # diacritics carry no aeiouy and are perfectly good words. One non-ASCII
+    # character means a script this heuristic cannot rule on, so it steps aside.
+    if tok.isascii() and not RE_HAS_VOWEL.search(tok):
         return False
     if tok.isdigit():
         return False
@@ -83,12 +146,22 @@ def keep(tok: str) -> bool:
     return True
 
 
+def _fold(text: str) -> str:
+    """NFC, so the same word typed two ways counts once.
+
+    macOS hands back decomposed text in places, and IMEs disagree: 'función'
+    can arrive as 7 characters or as 8 with a floating accent. Composing first
+    means one key in the counter instead of two.
+    """
+    return unicodedata.normalize("NFC", text)
+
+
 def tokens(text: str):
     """Lowercased content tokens from cleaned prose."""
     if not text:
         return []
     out = []
-    for m in RE_TOKEN.finditer(text):
+    for m in RE_TOKEN.finditer(_fold(text)):
         t = m.group(0).lower().strip("-.'")
         if keep(t):
             out.append(t)
@@ -99,7 +172,8 @@ def raw_tokens(text: str):
     """Tokens before stopword removal -- needed for phrase detection."""
     if not text:
         return []
-    return [m.group(0).lower().strip("-.'") for m in RE_TOKEN.finditer(text)]
+    return [m.group(0).lower().strip("-.'")
+            for m in RE_TOKEN.finditer(_fold(text))]
 
 
 def bigrams(toks):

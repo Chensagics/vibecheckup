@@ -38,10 +38,15 @@ Everything runs locally. Re-run any time to refresh.
 EOF
 }
 
+# Answer --help before anything else, so `curl ... | sh -s -- --help` neither
+# downloads a repo nor insists on a working python3 just to print usage.
+for a in "$@"; do
+  case "$a" in -h|--help) usage; exit 0 ;; esac
+done
+
 # --- python3 -----------------------------------------------------------------
 
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "vibecheck: python3 is required (3.8+) and was not found." >&2
+py_install_hint() {
   if [ "$(uname -s)" = "Darwin" ]; then
     echo "  On macOS, the Command Line Tools include it:" >&2
     echo "      xcode-select --install" >&2
@@ -51,18 +56,55 @@ if ! command -v python3 >/dev/null 2>&1; then
     echo "  Fedora:         sudo dnf install python3" >&2
     echo "  Arch:           sudo pacman -S python" >&2
   fi
+}
+
+# `command -v python3` is not enough. A Mac without the Command Line Tools
+# still carries a /usr/bin/python3 shim, so that check passed and the user got
+# Apple's install dialog instead of this message. Actually run python3, and
+# read the version it reports: the adapters need 3.9, which is what the CLT
+# installs.
+PY_VERSION="$(python3 -V 2>/dev/null)" || PY_VERSION=""
+if [ -z "$PY_VERSION" ]; then
+  echo "vibecheck: python3 (3.9+) is required, but there is no working python3 on your PATH." >&2
+  py_install_hint
+  exit 1
+fi
+
+PY_NUM="${PY_VERSION#Python }"
+PY_MAJOR="${PY_NUM%%.*}"
+PY_MINOR="${PY_NUM#*.}"
+PY_MINOR="${PY_MINOR%%.*}"
+case "$PY_MAJOR:$PY_MINOR" in
+  *[!0-9:]*|:*|*:)
+    echo "vibecheck: python3 (3.9+) is required, but 'python3 -V' printed '$PY_VERSION', which is not a version I can read." >&2
+    py_install_hint
+    exit 1 ;;
+esac
+if [ "$PY_MAJOR" -lt 3 ] || { [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 9 ]; }; then
+  echo "vibecheck: the python3 on your PATH is $PY_NUM, but vibecheck needs 3.9+ — install a newer Python 3 and re-run." >&2
+  py_install_hint
   exit 1
 fi
 
 # --- locate the checkout, or fetch one ---------------------------------------
 
-# Answer --help before anything else, so `curl ... | sh -s -- --help` does not
-# download a repo just to print usage.
-for a in "$@"; do
-  case "$a" in -h|--help) usage; exit 0 ;; esac
-done
+# A file called ingest.py is not proof of a checkout: plenty of repos have one,
+# and mistaking the user's for ours ran their code and wrote our data/ into
+# their tree. Require a combination only this repo has.
+is_checkout() {
+  [ -n "$1" ] && [ -f "$1/ingest.py" ] && [ -f "$1/adapters/base.py" ] &&
+    [ -f "$1/wcstats/prices.json" ]
+}
 
-SELF_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd || echo "")"
+# "$0" is only a path when it has a slash in it. Piped to sh (`curl ... | sh`)
+# it is just "sh", and dirname would hand back "." -- wherever the user happens
+# to be standing, which is nobody's checkout. Without a slash it can still be
+# `sh vibecheck.sh` run from inside one, which a file of that name next to a
+# real checkout tells apart.
+case "$0" in
+  */*) SELF_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd || echo "")" ;;
+  *)   if [ -f "./$0" ] && is_checkout "."; then SELF_DIR="$(pwd)"; else SELF_DIR=""; fi ;;
+esac
 
 fetch_repo() {
   # curl | sh path: no checkout next to us, so download the tarball.
@@ -83,11 +125,11 @@ fetch_repo() {
   fi
   tar -xzf "$tgz" -C "$PREFIX" --strip-components=1 || die "could not unpack $tgz"
   rm -f "$tgz"
-  [ -f "$PREFIX/ingest.py" ] ||
-    die "the download did not contain ingest.py — check GH_REPO=$GH_REPO"
+  is_checkout "$PREFIX" ||
+    die "the download does not look like vibecheck — check GH_REPO=$GH_REPO"
 }
 
-if [ -z "$SELF_DIR" ] || [ ! -f "$SELF_DIR/ingest.py" ]; then
+if ! is_checkout "$SELF_DIR"; then
   fetch_repo
   VIBECHECK_BOOTSTRAPPED=1
   export VIBECHECK_BOOTSTRAPPED

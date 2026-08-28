@@ -81,6 +81,31 @@ class Report:
                 if self.files[t] > 0 and self.parsed[t] == 0]
 
 
+def warn_partial(args, report):
+    """One line when a --tool/--limit smoke run is about to replace a full one.
+
+    Not an error and not a prompt: the run is exactly what was asked for. It
+    just says so once, so a suddenly thinner dashboard is never a mystery.
+    """
+    if not (args.tool or args.limit):
+        return
+    try:
+        prev = os.path.getsize(args.out)
+    except OSError:
+        return
+    if prev <= 0:
+        return
+    flags = []
+    if args.tool:
+        flags.append("--tool " + " --tool ".join(args.tool))
+    if args.limit:
+        flags.append(f"--limit {args.limit}")
+    n = sum(report.files.values())
+    print(f"  note: {' '.join(flags)} makes this a partial run of {n} "
+          f"file{'' if n == 1 else 's'}; it replaces the existing {args.out} "
+          f"({prev/1e6:.1f} MB). Re-run with no flags for the full corpus.")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tool", action="append", choices=list(ADAPTERS),
@@ -95,30 +120,65 @@ def main():
     report = Report()
     t0 = time.time()
 
-    with open(args.out, "w", encoding="utf-8") as out:
-        for tool in tools:
-            mod = ADAPTERS[tool]
-            files = mod.discover()
-            if args.limit:
-                files = files[:args.limit]
-            report.files[tool] = len(files)
-            for i, path in enumerate(files, 1):
-                try:
-                    n = 0
-                    for ev in mod.iter_events(path, report):
-                        out.write(ev.to_json())
-                        out.write("\n")
-                        n += 1
-                    report.events[tool] += n
-                    report.parsed[tool] += 1
-                except (OSError, ValueError, KeyError, TypeError,
-                        AttributeError, RecursionError) as exc:
-                    report.failed[tool] += 1
-                    print(f"  ! {tool}: {os.path.basename(path)}: "
-                          f"{type(exc).__name__}: {exc}", file=sys.stderr)
-                if i % 100 == 0 or i == len(files):
-                    print(f"  {tool}: {i}/{len(files)} files, "
-                          f"{report.events[tool]:,} events", flush=True)
+    # Discover everything before opening the output. A run that finds nothing
+    # must leave a previous corpus alone rather than truncating it on the way
+    # to an empty file.
+    found = {}
+    for tool in tools:
+        files = ADAPTERS[tool].discover()
+        if args.limit:
+            files = files[:args.limit]
+        found[tool] = files
+        report.files[tool] = len(files)
+
+    if sum(report.files.values()) == 0:
+        if args.tool:
+            print(f"\nno session logs found for {', '.join(tools)} on this "
+                  f"machine — {args.out} was left as it was.")
+        else:
+            print(f"\nno session logs found — none of the {len(ADAPTERS)} "
+                  f"supported tools ({', '.join(ADAPTERS)}) has session logs "
+                  f"on this machine.")
+        print("try the synthetic corpus instead:  ./vibecheck.sh --demo")
+        return 1
+
+    warn_partial(args, report)
+
+    # Write beside the target and rename over it only once the whole corpus is
+    # on disk: a crash, a Ctrl-C or a partial --tool/--limit run must never
+    # leave the previous events.ndjson truncated. Same directory, so os.replace
+    # stays atomic.
+    tmp = args.out + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as out:
+            for tool in tools:
+                mod = ADAPTERS[tool]
+                files = found[tool]
+                for i, path in enumerate(files, 1):
+                    try:
+                        n = 0
+                        for ev in mod.iter_events(path, report):
+                            out.write(ev.to_json())
+                            out.write("\n")
+                            n += 1
+                        report.events[tool] += n
+                        report.parsed[tool] += 1
+                    except (OSError, ValueError, KeyError, TypeError,
+                            AttributeError, RecursionError) as exc:
+                        report.failed[tool] += 1
+                        print(f"  ! {tool}: {os.path.basename(path)}: "
+                              f"{type(exc).__name__}: {exc}", file=sys.stderr)
+                    if i % 100 == 0 or i == len(files):
+                        print(f"  {tool}: {i}/{len(files)} files, "
+                              f"{report.events[tool]:,} events", flush=True)
+    except BaseException:
+        # Half a corpus is worse than none: drop it and keep what was there.
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+    os.replace(tmp, args.out)
 
     print(report.render())
     size = os.path.getsize(args.out)

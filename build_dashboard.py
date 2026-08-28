@@ -42,9 +42,15 @@ def main():
         print(f"FATAL: {TEMPLATE} has no {PLACEHOLDER} placeholder", file=sys.stderr)
         return 1
 
-    # "</script" inside a string would close the host <script> tag early.
-    # "\/" is a valid JSON escape, so this stays parseable.
-    safe = raw.replace("</", "<\\/")
+    # Two different ways raw log text escapes the host <script> block:
+    # "</script" closes it early, and a "<!--" anywhere before a "<script"
+    # flips the parser into its double-escaped state, where the template's own
+    # "</script>" closes nothing and the rest of the page is swallowed by the
+    # data block -- a silently blank dashboard. Escaping every "<" kills both.
+    # The replacement below is the escape JSON already defines for it, and "<"
+    # only ever occurs inside a JSON string, so the payload stays parseable and
+    # JSON.parse hands the original text back unchanged.
+    safe = raw.replace("<", "\\u003c")
     html = html.replace(PLACEHOLDER, safe)
 
     with open(OUT, "w", encoding="utf-8") as fh:

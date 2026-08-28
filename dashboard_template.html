@@ -1,3 +1,5 @@
+<!DOCTYPE html>
+<html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>vibecheck</title>
@@ -255,11 +257,31 @@ footer{margin-top:44px;padding-top:18px;border-top:1px solid var(--rule);
 .wr-words i{font-family:var(--mono);font-style:normal;font-size:10.5px;
   letter-spacing:0;color:var(--ink-3);margin-left:7px;vertical-align:middle}
 /* The share card: shown at its real 4:5 ratio, drawn at 1080x1350. */
-.wr-card{display:flex;flex-direction:column;align-items:center;gap:15px;
+.wr-card{display:flex;flex-direction:column;align-items:center;gap:12px;
   max-height:100%;min-height:0}
+/* The preview is the one part of this column that can afford to give: it
+   shrinks on its aspect ratio so the chips and the button stay in the frame
+   on a short window. */
 .wr-canvas{display:block;width:auto;height:auto;max-width:100%;
-  max-height:min(56vh,462px);border-radius:5px;border:1px solid var(--rule);
+  max-height:min(56vh,462px);flex:0 1 auto;min-height:0;
+  border-radius:5px;border:1px solid var(--rule);
   box-shadow:0 10px 34px rgba(0,0,0,.13)}
+/* The words on the card are the reader's own prose, so they get a switch:
+   lit = on the card, struck = dropped. The canvas redraws from the lit set,
+   and the PNG is that canvas. */
+.wr-chips{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;
+  gap:6px;max-width:min(620px,96%)}
+.wr-chips>span{font-family:var(--mono);font-size:10px;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--ink-3);margin-right:2px}
+.wr-chip{appearance:none;cursor:pointer;font-family:var(--mono);font-size:11.5px;
+  line-height:1;padding:7px 10px;border-radius:3px;background:var(--surface-2);
+  border:1px solid var(--rule-strong);color:var(--ink-2)}
+.wr-chip::after{content:" ×";color:var(--ink-3)}
+.wr-chip:hover{border-color:var(--ink);color:var(--ink)}
+.wr-chip.off{background:none;border-style:dashed;opacity:.62;
+  text-decoration:line-through}
+.wr-chip.off::after{content:" +";text-decoration:none}
+.wr-chip:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 .wr-dl{appearance:none;border:0;border-radius:3px;cursor:pointer;
   background:var(--ink);color:var(--page);font-family:var(--mono);font-size:12px;
   letter-spacing:.07em;text-transform:uppercase;padding:11px 20px}
@@ -294,6 +316,8 @@ footer{margin-top:44px;padding-top:18px;border-top:1px solid var(--rule);
   .wr-words{gap:0 13px}
   .wr-hint{display:none}
   .wr-canvas{max-height:42vh}
+  .wr-card{gap:10px}
+  .wr-chip{padding:8px 11px;font-size:12px}
   .wr-nav{padding:10px;gap:6px}
   .wr-ctl{gap:9px}
   .wr-dot{width:14px}
@@ -1238,7 +1262,7 @@ function renderSpend(){
    zero drops its slide instead of showing a hollow "0", so a thin corpus
    still gets a coherent (shorter) deck. Nothing here touches project names
    or paths — the last slide is an image people post. */
-const WR = {i:0, slides:[], dots:[], cv:null};
+const WR = {i:0, slides:[], dots:[], cv:null, chips:null};
 const WR_OK = !!(S.wrapped && (Number(S.wrapped.prompts)||0) > 0);
 const WR_MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const WR_DOW = {Mon:'Monday', Tue:'Tuesday', Wed:'Wednesday', Thu:'Thursday',
@@ -1285,6 +1309,19 @@ function wrWords(){
       ? {t:String(d[0]||''), n:wrNum(d[1])}
       : {t:String((d&&(d.t||d.word))||''), n:wrNum(d&&(d.n||d.count))})
     .filter(d => d.t);
+}
+/* The card is the one thing here that leaves the machine, and the words on it
+   are the reader's own prose -- a codename can sit at the top of the list and
+   look like any other noun. So the card draws from a filtered list the reader
+   controls, and everything the card touches goes through wrCardWords(). */
+const wrEx = new Set();
+function wrCardWords(){ return wrWords().filter(d => !wrEx.has(d.t)); }
+/* Dropping a word means it is off the card, not off the word list only -- the
+   signature phrase is built from the same prose and can carry it too. */
+function wrKept(s){
+  s = ' ' + String(s).toLowerCase() + ' ';
+  for (const x of wrEx) if (s.includes(' ' + x.toLowerCase() + ' ')) return false;
+  return true;
 }
 
 /* ---- slide construction ---- */
@@ -1448,19 +1485,60 @@ function wrCardSlide(){
   const cv = el('canvas','wr-canvas');
   cv.width = 1080; cv.height = 1350;
   cv.setAttribute('role','img');
-  const tw = wrWords();
-  cv.setAttribute('aria-label',
-    `Agent Wrapped share card: ${fmt(w.words_to_ai)} words typed to AI, ` +
-    `${fmt(w.prompts)} prompts` + (tw.length ? `, most-typed word "${tw[0].t}"` : '') + '.');
+  cv.setAttribute('aria-label', wrCardLabel());
   WR.cv = cv;
   box.appendChild(cv);
+  if (wrWords().length){
+    WR.chips = el('div','wr-chips');
+    WR.chips.setAttribute('role','group');
+    WR.chips.setAttribute('aria-label','Words on the share card');
+    wrChips();
+    box.appendChild(WR.chips);
+  }
   const btn = el('button','wr-dl','Download PNG');
   btn.type = 'button';
   btn.addEventListener('click', wrDownload);
   box.appendChild(btn);
   box.appendChild(wrFn('1080 × 1350, drawn in this page — nothing is uploaded. ' +
-    'No project names, no paths: counts and vocabulary only.'));
+    'No project names, no paths — but the words are your own prompts. ' +
+    'Read them before you post.'));
   return wrS('card', [box]);
+}
+
+function wrCardLabel(){
+  const w = S.wrapped || {}, tw = wrCardWords();
+  return `Agent Wrapped share card: ${fmt(w.words_to_ai)} words typed to AI, ` +
+    `${fmt(w.prompts)} prompts` +
+    (tw.length ? `, most-typed word "${tw[0].t}"` : '') + '.';
+}
+
+/* One chip per word the card is currently showing, plus the ones dropped so
+   far -- struck through rather than gone, because a mis-tap should be one tap
+   to undo. Toggling repaints the canvas, so the next word walks up into the
+   gap, and the PNG is that same canvas: what is not on screen is not in the
+   download either. */
+function wrChips(){
+  const box = WR.chips;
+  if (!box) return;
+  box.innerHTML = '';
+  box.appendChild(el('span', null, 'Tap to drop'));
+  const on = new Set(wrCardWords().slice(0, 5).map(d => d.t));
+  wrWords().filter(d => on.has(d.t) || wrEx.has(d.t)).forEach(d => {
+    const off = wrEx.has(d.t);
+    const b = el('button', 'wr-chip' + (off ? ' off' : ''), esc(d.t));
+    b.type = 'button';
+    b.setAttribute('aria-pressed', String(!off));
+    b.setAttribute('aria-label',
+      (off ? 'Put back on the card: ' : 'Drop from the card: ') + d.t);
+    b.addEventListener('click', ev => {
+      ev.stopPropagation();
+      if (off) wrEx.delete(d.t); else wrEx.add(d.t);
+      wrChips();
+      if (WR.cv) WR.cv.setAttribute('aria-label', wrCardLabel());
+      wrPaint();
+    });
+    box.appendChild(b);
+  });
 }
 
 function wrDownload(e){
@@ -1585,7 +1663,7 @@ function wrDrawCard(cv){
   const COL = W - 2*PAD;
   const blocks = [];
   const words = wrNum(w.words_to_ai);
-  const tw = wrWords();
+  const tw = wrCardWords();                 // minus anything the reader dropped
   const label = (s, y) => T(s, {x:PAD, y, size:19, fam:mono, weight:500,
                                track:.2, color:ink3, max:COL});
   // Display type set to the measure rather than to a fixed size: the hero
@@ -1634,7 +1712,7 @@ function wrDrawCard(cv){
     });
   }});
 
-  if (w.top_phrase) blocks.push({h:110, draw:y => {
+  if (w.top_phrase && wrKept(w.top_phrase)) blocks.push({h:110, draw:y => {
     label('SIGNATURE PHRASE', y+18);
     T('“' + w.top_phrase + '”', {x:PAD, y:y+96,
       size:toWidth('“' + w.top_phrase + '”', 600, 72), weight:600, track:-.03,
@@ -1653,7 +1731,9 @@ function wrDrawCard(cv){
       ? ['PEAK HOUR', wrHour(hour) + ' ' + wrHourVibe(hour)[0]] : null,
     (w.top_tool && w.top_tool.name)
       ? ['TOP TOOL', TOOL_LABEL[w.top_tool.name] || String(w.top_tool.name)] : null,
-    spTotal > 0 ? ['SPEND (EST.)', spUsd(spTotal)] : null,
+    // "(EST.)" alone is too easy to read as a bill once the cell is a JPEG on
+    // someone else's timeline, so the cell says what the estimate is made of.
+    spTotal > 0 ? ['SPEND (EST.)', spUsd(spTotal), 'list prices · not a bill'] : null,
     wrNum(w.longest_streak_days)
       ? ['LONGEST STREAK', fmt(w.longest_streak_days) + 'd'] : null,
     wrNum(w.tools_used) ? ['TOOLS USED', fmt(w.tools_used)] : null
@@ -1677,8 +1757,10 @@ function wrDrawCard(cv){
         const cx = PAD + col*cw + pad, cy = y + Math.floor(i/cols)*rh;
         T(c[0], {x:cx, y:cy+50, size:17, fam:mono, weight:500, track:.16,
                  color:ink3, max:cw-pad-14});
-        T(c[1], {x:cx, y:cy+112, size:52, weight:600, track:-.03,
+        T(c[1], {x:cx, y:cy+108, size:52, weight:600, track:-.03,
                  color:ink, max:cw-pad-22});
+        if (c[2]) T(c[2], {x:cx, y:cy+132, size:13, fam:mono, weight:400,
+                           color:ink3, max:cw-pad-22});
       });
     }});
   }
@@ -1923,3 +2005,4 @@ function boot(){
 }
 boot();
 </script>
+</html>

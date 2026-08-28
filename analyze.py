@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
-"""Stage 2: data/events.ndjson -> data/stats.json (+ data/vocab.json sidecar)
+"""Stage 2: data/events.ndjson -> data/stats.json (+ a vocab.json sidecar
+written beside it)
 
-Fails loudly on an empty or malformed event stream rather than emitting a
-misleading empty dashboard.
+Fails loudly on an empty or malformed event stream. A corpus that yields no
+*words* is a warning rather than a failure: the spend, activity and wrapped
+counts are still real, and half a dashboard beats none.
+
+Every calendar figure here -- day, hour, weekday, streak, busiest day -- is
+LOCAL time, on the same boundary wcstats.spend uses, so no two panels disagree
+about which day a 1am prompt belongs to.
 """
 from __future__ import annotations
 
@@ -12,12 +18,13 @@ import os
 import sys
 import time
 from collections import Counter, defaultdict
+from datetime import date, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from wcstats.clean import prose_text  # noqa: E402
 from wcstats.facets import Facets, error_signature, RE_EXT, SHELL_SUBCMD  # noqa: E402
 from wcstats.score import top_n, trends  # noqa: E402
-from wcstats.spend import Spend  # noqa: E402
+from wcstats.spend import Spend, local_date  # noqa: E402
 from wcstats.tokenize import (phrase_candidates, raw_tokens, shingle_key,  # noqa: E402
                               tokens)
 from wcstats.wrapped import Wrapped, build as build_wrapped  # noqa: E402
@@ -26,10 +33,48 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(HERE, "data")
 IN = os.path.join(DATA, "events.ndjson")
 OUT = os.path.join(DATA, "stats.json")
-VOCAB = os.path.join(DATA, "vocab.json")
+# The sidecar is derived from --out, never hard-coded: running with a scratch
+# --out must not overwrite the real data/vocab.json.
+VOCAB_NAME = "vocab.json"
+WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 # 2: events carry model/usage; stats.json gains "spend" and "wrapped".
 SCHEMA_VERSION = 2
 TOP_PROJECTS = 24
+
+
+def vocab_path(out):
+    """The vocab sidecar that belongs to this --out, in the same directory."""
+    return os.path.join(os.path.dirname(os.path.abspath(out)), VOCAB_NAME)
+
+
+def local_stamp(ts):
+    """UTC ISO timestamp -> (local day, local hour, local weekday).
+
+    Events are stored in UTC; the user lived them in their own timezone. A
+    22:00 UTC habit is a 1am habit in UTC+3 and a 2pm habit in UTC-8, so
+    reading the hour out of the ISO string puts the wrong number on the share
+    card for everyone outside Greenwich. `local_date` is spend.py's, on
+    purpose: activity and spend must key days identically or the dashboard
+    contradicts itself.
+
+    Anything unparseable comes back as (None, None, None), so one malformed
+    record is skipped rather than killing the whole stage.
+    """
+    day = local_date(ts)
+    if not day:
+        return None, None, None
+    hour = None
+    s = str(ts)
+    # A bare "2026-08-02" parses to midnight, and counting it as a 00:00
+    # prompt would invent an hour the record never carried. Only a timestamp
+    # with a clock in it gets a vote in the hour histogram.
+    if len(s) > 10:
+        try:
+            hour = datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone().hour
+        except (ValueError, TypeError, OSError, OverflowError):
+            pass
+    y, m, d = (int(x) for x in day.split("-"))
+    return day, hour, WEEKDAYS[date(y, m, d).weekday()]
 
 
 def argv_head(cmd):
@@ -64,8 +109,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--in", dest="inp", default=IN)
     ap.add_argument("--out", default=OUT)
+    ap.add_argument("--vocab", default=None,
+                    help="full-count sidecar; defaults to vocab.json beside --out")
     ap.add_argument("--top", type=int, default=300)
     args = ap.parse_args()
+    vocab_out = args.vocab or vocab_path(args.out)
 
     if not os.path.exists(args.inp):
         print(f"FATAL: {args.inp} does not exist. Run ingest.py first.",
@@ -109,8 +157,8 @@ def main():
             tool = ev.get("tool") or "unknown"
             project = ev.get("project") or "unknown"
             ts = ev.get("ts") or ""
-            month = ts[:7] if len(ts) >= 7 else "unknown"
-            day = ts[:10] if len(ts) >= 10 else None
+            day, hour, weekday = local_stamp(ts)
+            month = day[:7] if day else "unknown"
             sid = f"{tool}:{ev.get('session_id')}"
             kind = ev.get("kind")
             role = ev.get("role")
@@ -173,24 +221,30 @@ def main():
             if not text:
                 continue
 
-            if role == "user" and kind == "prompt":
+            is_prompt = role == "user" and kind == "prompt"
+            if is_prompt:
                 # Cleaned prose, before stopword removal: a prompt that is
                 # only "thanks!" survives here but tokenizes to nothing.
                 wrapped.add_user_prose(tool, text, day)
+                # Activity is a fact about the clock, not about what survived
+                # the stopword list: a prompt that tokenizes to nothing still
+                # happened, and in a script we cannot segment that is every
+                # prompt there is.
+                if day:
+                    per_day[day] += 1
+                    weekday_hist[weekday] += 1
+                    if hour is not None:
+                        hour_hist[hour] += 1
 
             toks = tokens(text)
             if not toks:
                 continue
             phrases = phrase_candidates(raw_tokens(text))
 
-            if role == "user" and kind == "prompt":
+            if is_prompt:
                 key = shingle_key(ev.get("text") or "")
                 for b in slices:
                     b.add_prompt(toks, phrases, key)
-                if day:
-                    per_day[day] += 1
-                    hour_hist[int(ts[11:13]) if len(ts) >= 13 else 0] += 1
-                    weekday_hist[_weekday(day)] += 1
                 month_user[month].update(toks)
             elif role == "assistant":
                 for b in slices:
@@ -202,9 +256,13 @@ def main():
 
     g = F.get("global", "all")
     if not g.prose_user:
-        print("FATAL: zero user prose survived filtering -- refusing to emit "
-              "an empty dashboard.", file=sys.stderr)
-        return 1
+        # Not fatal. A corpus can be entirely non-lexical -- a script written
+        # without spaces, or nothing but "ok" and "thanks" -- while the spend,
+        # activity and wrapped counts stay perfectly real. Refusing to build
+        # would hand the user nothing at all instead of most of a dashboard.
+        print("WARNING: zero user prose survived filtering. The word clouds, "
+              "phrases and trends will be empty; spend, activity and the "
+              "wrapped counts are unaffected.", file=sys.stderr)
 
     bg_user, bg_asst = g.prose_user, g.prose_asst
     months = sorted(m for m in F.keys("month") if m != "unknown")
@@ -285,7 +343,7 @@ def main():
 
     with open(args.out, "w", encoding="utf-8") as fh:
         json.dump(stats, fh, ensure_ascii=False, separators=(",", ":"))
-    with open(VOCAB, "w", encoding="utf-8") as fh:
+    with open(vocab_out, "w", encoding="utf-8") as fh:
         json.dump({"prose_user": g.prose_user.most_common(),
                    "prose_assistant": g.prose_asst.most_common(),
                    "tools": g.tools.most_common(),
@@ -320,18 +378,9 @@ def main():
           f"{w['longest_streak_days']}-day streak, peak {w['peak_hour']:02d}:00 "
           f"{w['peak_weekday']}, politeness {dict(w['politeness'])}")
 
-    print(f"\nwrote {args.out} ({size/1e6:.2f} MB) in {time.time()-t0:.1f}s")
+    print(f"\nwrote {args.out} ({size/1e6:.2f} MB) + {vocab_out} "
+          f"in {time.time()-t0:.1f}s")
     return 0
-
-
-def _weekday(day):
-    import datetime
-    try:
-        y, m, d = (int(x) for x in day.split("-"))
-        return ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][
-            datetime.date(y, m, d).weekday()]
-    except (ValueError, IndexError):
-        return "Mon"
 
 
 if __name__ == "__main__":

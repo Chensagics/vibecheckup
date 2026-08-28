@@ -5,11 +5,14 @@ is always pointed at a temporary file.
 """
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 
@@ -25,7 +28,7 @@ from wcstats.tokenize import tokens  # noqa: E402
 
 # The design contract (section 4) adds model + usage to the adapter event.
 # Event.to_json omits both when they are empty, so they are optional per line.
-EVENT_FIELDS = set(Event.__slots__) | {"model", "usage"}
+EVENT_FIELDS = {f.name for f in dataclasses.fields(Event)} | {"model", "usage"}
 REQUIRED_FIELDS = EVENT_FIELDS - {"model", "usage"}
 USAGE_FIELDS = {"input", "output", "cache_read", "cache_write"}
 
@@ -174,6 +177,262 @@ class TestVibecheckScript(unittest.TestCase):
         proc = self.sh("--demo", "--no-open")
         self.assertEqual(proc.returncode, 1)
         self.assertIn("--force", proc.stderr)
+
+
+# --- python3 detection --------------------------------------------------------
+
+# `command -v python3` used to be the whole check, which passes on a Mac with no
+# Command Line Tools (the /usr/bin/python3 shim exists but only opens Apple's
+# installer). Each stub below stands in for one way that goes wrong.
+SHIM_PY = '#!/bin/sh\necho "requesting install" >&2\nexit 1\n'
+OLD_PY = '#!/bin/sh\n[ "$1" = "-V" ] && { echo "Python 3.8.10"; exit 0; }\nexit 0\n'
+JUNK_PY = '#!/bin/sh\necho "banana"\n'
+
+
+class TestPythonProbe(unittest.TestCase):
+    """vibecheck must name the problem itself, never hand over a traceback."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.bin = os.path.join(self.tmp.name, "bin")
+        os.makedirs(self.bin)
+
+    def stub(self, body):
+        path = os.path.join(self.bin, "python3")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(body)
+        os.chmod(path, 0o755)
+
+    def run_script(self, *args, only_stub_on_path=False):
+        env = dict(os.environ)
+        if only_stub_on_path:
+            # A PATH with no python3 at all. uname/cat are all the script needs
+            # to reach its own error message.
+            for tool in ("uname", "cat"):
+                src = shutil.which(tool)
+                if src:
+                    os.symlink(src, os.path.join(self.bin, tool))
+            env["PATH"] = self.bin
+        else:
+            env["PATH"] = self.bin + os.pathsep + env.get("PATH", "")
+        return subprocess.run(["/bin/sh", SCRIPT, *args], capture_output=True,
+                              text=True, env=env, stdin=subprocess.DEVNULL,
+                              timeout=60)
+
+    def assertRefused(self, proc):
+        self.assertEqual(proc.returncode, 1, proc.stdout)
+        self.assertNotIn("Traceback", proc.stderr)
+        self.assertIn("3.9+", proc.stderr)
+        # The platform-specific install guidance survives.
+        self.assertTrue("xcode-select" in proc.stderr or "apt install" in proc.stderr,
+                        proc.stderr)
+
+    def test_missing_python3_is_refused(self):
+        self.assertRefused(self.run_script("--no-open", only_stub_on_path=True))
+
+    def test_a_python3_that_does_not_run_is_refused(self):
+        self.stub(SHIM_PY)
+        proc = self.run_script("--no-open")
+        self.assertRefused(proc)
+        self.assertIn("no working python3", proc.stderr)
+
+    def test_too_old_python3_is_refused_and_named(self):
+        self.stub(OLD_PY)
+        proc = self.run_script("--no-open")
+        self.assertRefused(proc)
+        self.assertIn("3.8.10", proc.stderr)
+
+    def test_an_unreadable_version_is_refused_not_guessed(self):
+        self.stub(JUNK_PY)
+        proc = self.run_script("--no-open")
+        self.assertRefused(proc)
+        self.assertIn("banana", proc.stderr)
+
+    def test_help_still_works_without_a_usable_python3(self):
+        self.stub(SHIM_PY)
+        proc = self.run_script("--help")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("--demo", proc.stdout)
+
+
+# --- curl | sh ----------------------------------------------------------------
+
+# curl replacement: the bootstrap must be exercised without a network call.
+FAKE_CURL = """#!/bin/sh
+out=""
+while [ $# -gt 0 ]; do
+  case "$1" in -o) shift; out="$1" ;; esac
+  shift
+done
+[ -n "$out" ] || exit 1
+exec cp "%s" "$out"
+"""
+
+STUB_MODULES = {
+    "ingest.py": 'print("BOOTSTRAP_INGEST_RAN")\n',
+    "analyze.py": 'print("BOOTSTRAP_ANALYZE_RAN")\n',
+    "build_dashboard.py": 'open("dashboard.html", "w").write("<html></html>")\n',
+}
+
+
+class TestCurlPipeBootstrap(unittest.TestCase):
+    """`curl ... | sh` must never mistake the user's cwd for a checkout.
+
+    Piped to sh, "$0" is just "sh", so dirname used to yield "." -- and any
+    directory holding a file called ingest.py counted as a checkout. Standing in
+    an unrelated repo, that ran the user's own ingest.py and analyze.py and left
+    a data/ directory in their tree.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.prefix = os.path.join(self.tmp.name, "prefix")
+        self.cwd = os.path.join(self.tmp.name, "cwd")
+        os.makedirs(self.cwd)
+        # The user's own project: an ingest.py that is not ours.
+        for name in ("ingest.py", "analyze.py"):
+            with open(os.path.join(self.cwd, name), "w", encoding="utf-8") as fh:
+                fh.write(f'print("MARKER_USER_{name[:-3].upper()}")\n')
+        self.bin = os.path.join(self.tmp.name, "bin")
+        os.makedirs(self.bin)
+        self.tarball = self.build_tarball()
+        curl = os.path.join(self.bin, "curl")
+        with open(curl, "w", encoding="utf-8") as fh:
+            fh.write(FAKE_CURL % self.tarball)
+        os.chmod(curl, 0o755)
+
+    def build_tarball(self):
+        """A stand-in repo: the real vibecheck.sh plus stubs for the stages."""
+        stage = os.path.join(self.tmp.name, "stage", "repo")
+        os.makedirs(os.path.join(stage, "adapters"))
+        os.makedirs(os.path.join(stage, "wcstats"))
+        shutil.copy(SCRIPT, os.path.join(stage, "vibecheck.sh"))
+        # The checkout sentinel: both files must be present for a directory to
+        # count as a checkout.
+        with open(os.path.join(stage, "adapters", "base.py"), "w") as fh:
+            fh.write("# sentinel\n")
+        with open(os.path.join(stage, "wcstats", "prices.json"), "w") as fh:
+            fh.write("{}\n")
+        for name, body in STUB_MODULES.items():
+            with open(os.path.join(stage, name), "w", encoding="utf-8") as fh:
+                fh.write(body)
+        path = os.path.join(self.tmp.name, "repo.tar.gz")
+        with tarfile.open(path, "w:gz") as tar:
+            tar.add(stage, arcname="repo")
+        return path
+
+    def pipe(self, *args):
+        env = dict(os.environ)
+        env["PATH"] = self.bin + os.pathsep + env.get("PATH", "")
+        env["VIBECHECK_HOME"] = self.prefix
+        with open(SCRIPT, "rb") as fh:
+            return subprocess.run(["/bin/sh", "-s", "--", *args], stdin=fh,
+                                  capture_output=True, text=True, cwd=self.cwd,
+                                  env=env, timeout=120)
+
+    def test_the_users_own_ingest_py_is_never_run(self):
+        proc = self.pipe("--no-open")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn("MARKER_USER_INGEST", proc.stdout)
+        self.assertNotIn("MARKER_USER_ANALYZE", proc.stdout)
+
+    def test_it_bootstraps_into_its_own_prefix_instead(self):
+        proc = self.pipe("--no-open")
+        self.assertIn("no checkout here", proc.stdout)
+        self.assertIn("BOOTSTRAP_INGEST_RAN", proc.stdout)
+        self.assertTrue(os.path.isfile(os.path.join(self.prefix, "vibecheck.sh")))
+
+    def test_nothing_is_written_into_the_users_directory(self):
+        self.pipe("--no-open")
+        self.assertEqual(sorted(os.listdir(self.cwd)), ["analyze.py", "ingest.py"])
+
+    def test_a_real_checkout_carries_both_sentinel_files(self):
+        for rel in ("ingest.py", "adapters/base.py", "wcstats/prices.json"):
+            self.assertTrue(os.path.isfile(os.path.join(ROOT, *rel.split("/"))),
+                            f"{rel} is the checkout sentinel vibecheck.sh looks for")
+
+
+# --- ingest safety ------------------------------------------------------------
+
+INGEST = os.path.join(ROOT, "ingest.py")
+GROK_SESSION = os.path.join(".grok", "sessions",
+                            "%2FUsers%2Falice%2FProjects%2Fdemo", "sess-1")
+
+
+class TestIngestNeverDestroysTheCorpus(unittest.TestCase):
+    """A run that finds nothing, or finds less, must not eat events.ndjson."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.home = self.tmp.name
+        self.out = os.path.join(self.home, "events.ndjson")
+        with open(self.out, "w", encoding="utf-8") as fh:
+            fh.write("PREVIOUS CORPUS\n" * 20)
+        with open(self.out, "rb") as fh:
+            self.before = fh.read()
+
+    def add_grok_session(self):
+        d = os.path.join(self.home, GROK_SESSION)
+        os.makedirs(d)
+        with open(os.path.join(d, "chat_history.jsonl"), "w", encoding="utf-8") as fh:
+            fh.write('{"type": "user", "content": "refactor the parser"}\n')
+            fh.write('{"type": "assistant", "content": "done, tests pass"}\n')
+
+    def ingest(self, *args):
+        env = dict(os.environ)
+        env["HOME"] = self.home
+        return subprocess.run([sys.executable, INGEST, "--out", self.out, *args],
+                              capture_output=True, text=True, env=env, timeout=120)
+
+    def current(self):
+        with open(self.out, "rb") as fh:
+            return fh.read()
+
+    def test_finding_nothing_fails_loudly_and_changes_nothing(self):
+        proc = self.ingest()
+        self.assertNotEqual(proc.returncode, 0, proc.stdout)
+        self.assertIn("no session logs found", proc.stdout)
+        self.assertIn("--demo", proc.stdout)
+        self.assertEqual(self.current(), self.before,
+                         "an empty run truncated the previous corpus")
+
+    def test_finding_nothing_never_claims_there_were_no_errors(self):
+        # The old contradiction: "FATAL ERRORS: none" and exit 0, then analyze.py
+        # died on an empty events.ndjson.
+        self.assertNotIn("FATAL ERRORS: none", self.ingest().stdout)
+
+    def test_a_named_tool_with_no_logs_leaves_the_corpus_alone(self):
+        proc = self.ingest("--tool", "grok")
+        self.assertNotEqual(proc.returncode, 0, proc.stdout)
+        self.assertIn("grok", proc.stdout)
+        self.assertEqual(self.current(), self.before)
+
+    def test_no_temp_file_is_left_behind(self):
+        self.ingest()
+        self.assertFalse(os.path.exists(self.out + ".tmp"))
+
+    def test_a_successful_run_replaces_the_corpus_atomically(self):
+        self.add_grok_session()
+        proc = self.ingest("--tool", "grok")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertFalse(os.path.exists(self.out + ".tmp"))
+        lines = [json.loads(x) for x in self.current().decode().splitlines() if x.strip()]
+        self.assertEqual(len(lines), 2)
+        self.assertEqual({e["tool"] for e in lines}, {"grok"})
+
+    def test_a_partial_run_says_it_is_replacing_a_full_corpus(self):
+        self.add_grok_session()
+        proc = self.ingest("--tool", "grok", "--limit", "1")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("partial run", proc.stdout)
+        self.assertIn("--limit 1", proc.stdout)
+
+    def test_a_full_run_stays_quiet_about_partials(self):
+        self.add_grok_session()
+        self.assertNotIn("partial run", self.ingest().stdout)
 
 
 if __name__ == "__main__":

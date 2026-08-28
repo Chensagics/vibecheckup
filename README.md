@@ -11,7 +11,7 @@ Grok CLI, Gemini CLI, Antigravity — and builds a single self-contained
 Nothing is installed, nothing is uploaded, `python3` is the only requirement.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-d97757.svg)](LICENSE)
-[![Python 3.8+](https://img.shields.io/badge/Python-3.8%2B-3fb950.svg)](https://www.python.org/)
+[![Python 3.9+](https://img.shields.io/badge/Python-3.9%2B-3fb950.svg)](https://www.python.org/)
 ![Dependencies: none](https://img.shields.io/badge/dependencies-none-58a6ff.svg)
 ![Works offline](https://img.shields.io/badge/works-offline-a371f7.svg)
 
@@ -32,9 +32,10 @@ an AI this year, how many prompts and sessions, your top words and top phrase,
 your peak hour and weekday, your longest streak and busiest day, how often you
 said *please*, which tool you actually live in, what it would have cost. It ends
 on a share card drawn to a `<canvas>` with a **Download PNG** button — branded
-`VIBECHECK ⚡ AGENT WRAPPED 2026`, and containing **no project names and no local
-paths**. Counts and vocabulary only. Slides whose stat is missing are skipped,
-not faked.
+`VIBECHECK ⚡ AGENT WRAPPED 2026`, with **no directory names and no file
+paths — but the words are yours**, lifted straight from your prompts, so read
+them before posting. Tap any word on the card to drop it and the next one moves
+up. Slides whose stat is missing are skipped, not faked.
 
 ### Lexicon — what you actually say to an AI
 
@@ -85,6 +86,11 @@ then ask if I want to proceed. If I say yes, install and run it, then read the
 stats it generates and tell me what a year of my prompts says about me.
 ```
 
+Note: that last step shows your `stats.json` — your vocabulary and your project
+names — to whatever model you are driving. The local run itself uploads nothing;
+handing the results to an agent is your call, and the dashboard alone answers
+the same questions without it.
+
 From a checkout:
 
 ```bash
@@ -115,8 +121,12 @@ python3 analyze.py         # events            -> data/stats.json
 python3 build_dashboard.py # stats + template  -> dashboard.html
 ```
 
-Python 3 standard library only. `python3` is the single requirement; on a bare
-Mac the script points you at `xcode-select --install`.
+Python 3.9+, standard library only. `python3` is the single requirement; on a
+bare Mac the script points you at `xcode-select --install`.
+
+**Platforms:** macOS and Linux. On Windows, run it under WSL or Git Bash — the
+wrapper is a POSIX shell script, and the log locations it reads are the ones
+your tools write inside that environment.
 
 ## Privacy
 
@@ -129,10 +139,14 @@ dashboard opens over `file://`. The one network call in the project is the
 - **The repo ships no user data.** `data/`, `snapshots/` and `dashboard.html`
   are gitignored, because they contain your real vocabulary, project names and
   local paths.
-- **The Wrapped card contains no project names and no paths** — that rule is
-  enforced in `wcstats/wrapped.py`, not in the page, so it holds for anything
-  built from `stats.json`. You choose what to share: the card is a PNG you
-  download, not something this tool posts anywhere.
+- **The Wrapped card carries no directory names and no file paths** — that rule
+  is enforced in `wcstats/wrapped.py`, not in the page, so it holds for anything
+  built from `stats.json`. **The words on it are a different matter: they are
+  yours**, straight out of your own prompts, and a product codename you typed all
+  year can land at the top of the list. Read the card before posting it, and tap
+  any word to drop it — the card and the PNG both redraw without it. You choose
+  what to share: the card is a PNG you download, not something this tool posts
+  anywhere.
 - Politeness counters and every word cloud run over *cleaned* prose, so a
   "please" injected by a hook or a skill definition can never be credited to
   you.
@@ -250,14 +264,20 @@ so the dashboard loads instantly.
 ## Development
 
 ```bash
-python3 -m unittest discover -s tests   # 124 tests, fixtures only, no network
+python3 -m unittest discover -s tests   # fixtures only, no network
 ./vibecheck.sh --demo --no-open         # full pipeline on synthetic data
 ```
 
-Tests run entirely on checked-in fixtures — they never read your real logs. The
-fixture suite covers adapter classification, the cleaner, the scoring maths,
+**161 tests on a fresh clone, 180 once you have built a dashboard.** The
+difference is 19 checks that read `data/stats.json` and `dashboard.html`; with
+nothing built yet they skip rather than fail, so a clone with no logs still runs
+green.
+
+The rest run entirely on checked-in fixtures — they never read your real logs.
+The fixture suite covers adapter classification, the cleaner, the scoring maths,
 pricing (including the Codex cumulative-total trap and the unknown-model null),
-the `stats.json` contract, and the bootstrap script's argument handling.
+the `stats.json` contract, the inlining that keeps a stray `<script` in your
+logs from blanking the page, and the bootstrap script's argument handling.
 
 ## Roadmap
 

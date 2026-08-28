@@ -27,7 +27,10 @@ TOOL_RESULT_CAP = 2000
 TEXT_CAP = 200_000
 
 
-@dataclass(slots=True)
+# No slots=True: that argument arrived in 3.10, and macOS ships 3.9.6 with the
+# Command Line Tools -- which is exactly the Python vibecheck.sh tells people to
+# install. The memory it saved is not worth failing at import on a stock Mac.
+@dataclass
 class Event:
     ts: Optional[str]
     tool: str
