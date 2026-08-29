@@ -133,6 +133,83 @@ RE_HAS_VOWEL = re.compile(r"[aeiouy]")
 RE_DOTTED_CHAIN = re.compile(r"^\w+\.\w+\.\w+")
 
 
+# --- opaque high-entropy strings ---------------------------------------------
+#
+# clean_prose() removes the obvious blobs by shape, and between its rules there
+# was a gap exactly the width of a modern API key: RE_B64 wants 40+ characters
+# and rejects the '-' and '_' of base64url, RE_HEX wants 12+ hex digits and
+# nothing else, and keep() only caps a token at 28. Anything base64url-ish
+# between about 20 and 28 characters fell straight through --
+# `sk-proj-Ab3xQ9pLm2` tokenized to `['key', 'sk-proj-ab3xq9plm2']` -- and 202
+# such strings sat in the shipped vocab.json (Antigravity's protobuf-recovered
+# step ids, e.g. `eyp7apy0npczxn8p1l-xqqe`).
+
+# Where a token is split into alphanumeric runs before it is judged. A name
+# like `missing_strings_0.json` is three ordinary words and a counter; an
+# opaque id is one long run.
+RE_ALNUM_RUN = re.compile(r"[0-9a-z]+")
+RE_DIGIT_RUN = re.compile(r"\d+")
+VOWELS = frozenset("aeiouy")
+
+# One run has to be at least this long before it can be called opaque.
+OPAQUE_RUN_LEN = 10
+# ...and carry digits at this many separate positions. THE discriminating
+# feature, and the reason a cheaper rule could not be used: a version suffix
+# (`v2`, `chunk1`, `wp213`) and a numeronym (`i18n`, `a11y`, `l10n`, `k8s`)
+# each have exactly ONE digit run, while a random id has them scattered.
+# Requiring three keeps `i18nmanager` (53 occurrences in the real corpus),
+# `initreacti18next`, `confirma11ylabel` and `compute20daylow` as vocabulary.
+OPAQUE_DIGIT_RUNS = 3
+# A long run with almost no vowels is opaque even without digits.
+OPAQUE_NOVOWEL_LEN = 14
+OPAQUE_VOWEL_RATIO = 0.20
+
+
+def looks_opaque(tok: str) -> bool:
+    """True when a token is a random-looking blob rather than a word.
+
+    Judged per alphanumeric run, so that separators keep their meaning: the
+    run is the unit a human names, and a name is either short or pronounceable.
+    """
+    if len(tok) < OPAQUE_RUN_LEN:
+        return False
+    for run in RE_ALNUM_RUN.findall(tok):
+        if len(run) < OPAQUE_RUN_LEN:
+            continue
+        letters = [c for c in run if c.isalpha()]
+        if not letters:
+            continue                      # a pure number: RE_NUM's business
+        if len(RE_DIGIT_RUN.findall(run)) >= OPAQUE_DIGIT_RUNS:
+            return True
+        if (len(run) >= OPAQUE_NOVOWEL_LEN
+                and sum(1 for c in letters if c in VOWELS) / len(letters)
+                < OPAQUE_VOWEL_RATIO):
+            return True
+    return False
+
+
+# Credential shapes that are worth naming outright: a vendor prefix is a much
+# stronger signal than any entropy measure, and it catches the short ones the
+# entropy rule cannot see (`AKIA` + 16 characters carries a single digit run).
+# Deliberately excludes `npm_` and `hf_`, which collide with `npm_package_*`
+# environment variables and `hf_hub`.
+RE_CREDENTIAL = re.compile(
+    r"^(?:"
+    r"(?:sk|pk|rk)[-_][a-z0-9_\-]{9,}"        # OpenAI / Anthropic / Stripe
+    r"|gh[pousr]_[a-z0-9]{8,}"                # GitHub token
+    r"|github_pat_[a-z0-9_]{8,}"
+    r"|glpat-[a-z0-9_\-]{8,}"                 # GitLab
+    r"|xox[abprse]-[a-z0-9_\-]{6,}"           # Slack
+    r"|(?:akia|asia)[a-z0-9]{12,}"            # AWS access key id
+    r"|aiza[a-z0-9_\-]{12,}"                  # Google API key
+    r"|sq0(?:atp|csp)-[a-z0-9_\-]{8,}"        # Square
+    r"|(?:shpat|shpss|shpca|shppa)_[a-z0-9]{8,}"   # Shopify
+    r"|dop_v1_[a-z0-9]{8,}"                   # DigitalOcean
+    r"|pypi-[a-z0-9_\-]{8,}"                  # PyPI
+    r")$"
+)
+
+
 def keep(tok: str) -> bool:
     if len(tok) < 3 or len(tok) > 28:
         return False
@@ -166,6 +243,11 @@ def keep(tok: str) -> bool:
     # Reject identifier-looking soup: many digits, or long lowercase hex.
     digits = sum(c.isdigit() for c in tok)
     if digits and (len(tok) <= 3 or digits / len(tok) > 0.4):
+        return False
+    # A secret is not vocabulary, and it is the one leak whose cost is
+    # unbounded. Named shapes first (cheap and exact), then the entropy test
+    # for the ids no vendor prefix announces.
+    if RE_CREDENTIAL.match(tok) or looks_opaque(tok):
         return False
     # Second boundary for self-redaction. clean_prose() already masked these
     # out of prose, so in the normal path this never fires -- but keep() is

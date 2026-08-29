@@ -11,6 +11,10 @@ but ingest is the only stage that touches the filesystem, so it is the only one
 that can see which repositories the sessions ran in and which worktree branch
 names those paths carry. Those go in the sidecar for analyze.py, which is the
 stage that publishes.
+
+The sidecar NAMES the strings that get masked, so it is as private as the
+corpus it sits next to -- see SIDECAR_WARNING for why it exists at all and why
+it is written owner-readable only.
 """
 from __future__ import annotations
 
@@ -40,6 +44,32 @@ def redact_path(out):
     return os.path.join(os.path.dirname(os.path.abspath(out)), REDACT_NAME)
 
 
+# build_redaction()'s own docstring says a redaction report "must never be
+# written into stats.json or vocab.json ... a list of exactly the strings
+# somebody wanted hidden is the leak, spelled out" -- and this file is that
+# list. It is kept anyway, and the reason is narrow: two of the things in it
+# cannot be derived anywhere else.
+#
+#   * the account half of the git remotes, which needs `.git/config` on the
+#     machine the sessions ran on;
+#   * which repo each worktree branch belongs to, which needs the worktree to
+#     still exist on disk.
+#
+# analyze.py publishes and never sees a filesystem, so without the sidecar
+# those two are simply lost and the strings they would have masked ship. What
+# the sidecar is NOT is a shareable artifact: it lives beside events.ndjson,
+# which is already the unredacted corpus, in a gitignored directory, and it is
+# written owner-readable only with its own warning inside it. If you would not
+# send somebody events.ndjson, do not send them data/.
+SIDECAR_WARNING = (
+    "PRIVATE — do not share. This is the list of literals vibecheckup masks "
+    "out of stats.json, vocab.json and the dashboard: account names, and the "
+    "worktree branch names of your repositories. Handing this file to somebody "
+    "is handing them the answer key. analyze.py reads it; nothing else should."
+)
+SIDECAR_MODE = 0o600
+
+
 def write_redaction(out, extra):
     """Derive who is running this and what they were branching, and record it.
 
@@ -55,9 +85,22 @@ def write_redaction(out, extra):
     path = redact_path(out)
     payload = {k: report[k] for k in
                ("identities", "branches", "decorated", "explicit")}
+    payload["_warning"] = SIDECAR_WARNING
+    # branch -> the repo it belongs to. Only the filesystem knows that a
+    # directory called `finn-loop-writer` is a linked worktree of `finn` and
+    # not a repository of its own, so a corpus ingested before that was
+    # resolved cannot be repaired from its labels alone -- carrying the pairing
+    # here is what lets analyze.py re-attribute those events instead of
+    # masking them. Redaction ignores this key; label repair is its only use.
+    payload["branch_repos"] = {b: r for b, r in OBSERVED.pairs() if r}
     try:
-        with open(path, "w", encoding="utf-8") as fh:
+        # Owner-only, and set on the descriptor rather than after the write, so
+        # the contents are never briefly world-readable. An existing file keeps
+        # whatever mode it has, so tighten it explicitly too.
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, SIDECAR_MODE)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(payload, fh, ensure_ascii=False, indent=1, sort_keys=True)
+        os.chmod(path, SIDECAR_MODE)
     except OSError as exc:
         print(f"  warning: could not write {path}: {exc}", file=sys.stderr)
         return report, None
@@ -232,7 +275,9 @@ def main():
     print()
     print(format_redaction(red))
     if red_path:
-        print(f"  wrote {red_path} (local only; analyze.py reads it)")
+        print(f"  wrote {red_path} (mode 0600, local only; analyze.py reads "
+              f"it). It NAMES the strings that get masked — private, like the "
+              f"rest of {os.path.dirname(red_path)}.")
     fatal = report.fatal
     if fatal:
         print(f"\nFATAL: sources found files but parsed none: {', '.join(fatal)}")

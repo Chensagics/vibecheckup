@@ -27,9 +27,10 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 
 from adapters import gemini_cli  # noqa: E402
-from adapters.base import (HOME_LABEL, TMP_LABEL, UNKNOWN,  # noqa: E402
-                           decode_dash_path, normalize_project,
-                           project_from_cwd, project_from_encoded_dir)
+from adapters.base import (HOME_LABEL, OBSERVED, TMP_LABEL,  # noqa: E402
+                           UNKNOWN, clear_path_cache, decode_dash_path,
+                           normalize_project, project_from_cwd,
+                           project_from_encoded_dir)
 
 HOME = os.path.expanduser("~").rstrip("/")
 
@@ -177,6 +178,237 @@ class TestAdapterEntryPoints(unittest.TestCase):
         label = gemini_cli._project_label(
             os.path.join(base, "chats", "session-1.json"), "hash")
         self.assertEqual(label, "finn")
+
+
+def make_linked_worktree(root, repo="finn", name="finn-loop-writer",
+                         branch="main_writer", relative=False):
+    """A repo and a linked worktree beside it, laid out as git leaves them.
+
+    `git worktree add ../finn-loop-writer` writes two things: an admin
+    directory <repo>/.git/worktrees/<name> holding the worktree's own HEAD,
+    and a <worktree>/.git FILE naming it. Nothing else marks the checkout, and
+    neither its path nor its name mentions the repo.
+    """
+    admin = os.path.join(root, repo, ".git", "worktrees", name)
+    os.makedirs(admin)
+    wt = os.path.join(root, name)
+    os.makedirs(wt)
+    target = os.path.relpath(admin, wt) if relative else admin
+    with open(os.path.join(wt, ".git"), "w", encoding="utf-8") as fh:
+        fh.write("gitdir: %s\n" % target)
+    with open(os.path.join(admin, "HEAD"), "w", encoding="utf-8") as fh:
+        fh.write(("ref: refs/heads/%s\n" % branch) if branch
+                 else "9d1e4a2b" * 5 + "\n")
+    with open(os.path.join(admin, "gitdir"), "w", encoding="utf-8") as fh:
+        fh.write(os.path.join(wt, ".git") + "\n")
+    return os.path.join(root, repo), wt
+
+
+class TestSiblingWorktreeCollapse(unittest.TestCase):
+    """`git worktree add ../name` is the ordinary way to make a worktree, and
+    it leaves NOTHING in the path to recognise.
+
+    The owner's `finn` had a dozen of them -- finn-loop-writer, finn-loop-ship,
+    finn-loop-sim, finn-writer-task-NNNN -- and every one shipped as a project
+    of its own, splitting one repo across five rows of the Activity table and
+    publishing the names of the loops that made them. The branches those
+    worktrees sat on (main_writer, main_ship) then rode into stats.json inside
+    error signatures, because nothing had ever put them on the redaction list.
+    """
+
+    def setUp(self):
+        self.tmp = os.path.realpath(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        clear_path_cache()
+        self.addCleanup(clear_path_cache)
+        OBSERVED.clear()
+        self.addCleanup(OBSERVED.clear)
+        # These trees have to live under $TMPDIR, and the tmp rule would
+        # otherwise answer "tmp" for every one of them before the leaf name is
+        # ever reached -- which hides exactly the outcome under test. Suspended
+        # here; TestSiblingWorktreeUnderTmp keeps it and checks the ordering.
+        base = sys.modules["adapters.base"]
+        real = base._is_temp
+        base._is_temp = lambda path: False
+        self.addCleanup(setattr, base, "_is_temp", real)
+
+    def test_the_worktree_is_labelled_by_its_repo(self):
+        _repo, wt = make_linked_worktree(self.tmp)
+        self.assertEqual(project_from_cwd(wt), "finn")
+
+    def test_a_session_started_inside_the_worktree_folds_too(self):
+        _repo, wt = make_linked_worktree(self.tmp)
+        deep = os.path.join(wt, "packages", "api", "src")
+        os.makedirs(deep)
+        self.assertEqual(project_from_cwd(deep), "finn")
+
+    def test_five_worktrees_of_one_repo_are_one_project(self):
+        for name in ("finn-loop-writer", "finn-loop-ship", "finn-loop-sim",
+                     "finn-writer-task-1945", "finn-i18n"):
+            make_linked_worktree(self.tmp, name=name, branch="main_" + name[-3:])
+        labels = {project_from_cwd(os.path.join(self.tmp, n))
+                  for n in ("finn-loop-writer", "finn-loop-ship",
+                            "finn-loop-sim", "finn-writer-task-1945",
+                            "finn-i18n")}
+        self.assertEqual(labels, {"finn"})
+
+    def test_the_directory_name_and_the_branch_both_reach_the_redaction_list(self):
+        """Two different strings. The directory is what leaked as a project;
+        the branch is what leaks in an error signature."""
+        _repo, wt = make_linked_worktree(self.tmp)
+        project_from_cwd(wt)
+        self.assertEqual(OBSERVED.branches.get("finn-loop-writer"), "finn")
+        self.assertEqual(OBSERVED.branches.get("main_writer"), "finn")
+
+    def test_a_relative_gitdir_resolves(self):
+        _repo, wt = make_linked_worktree(self.tmp, relative=True)
+        self.assertEqual(project_from_cwd(wt), "finn")
+
+    def test_a_detached_worktree_still_folds_and_invents_no_branch(self):
+        _repo, wt = make_linked_worktree(self.tmp, name="finn-detached",
+                                         branch=None)
+        self.assertEqual(project_from_cwd(wt), "finn")
+        self.assertEqual(OBSERVED.branches.get("finn-detached"), "finn")
+        self.assertEqual([b for b in OBSERVED.branches if b.startswith("9d1e")],
+                         [])
+
+    def test_an_ordinary_checkout_is_untouched(self):
+        repo = os.path.join(self.tmp, "my-web-app")
+        os.makedirs(os.path.join(repo, ".git"))
+        self.assertEqual(project_from_cwd(repo), "my-web-app")
+        # ...and a subdirectory of one is still named after itself, exactly as
+        # before: finding a .git DIRECTORY stops the walk without relabelling.
+        sub = os.path.join(repo, "packages", "api")
+        os.makedirs(sub)
+        self.assertEqual(project_from_cwd(sub), "api")
+
+    def test_a_hyphenated_directory_that_is_not_a_worktree_is_untouched(self):
+        for name in ("finn-loop-writer", "session-lexicon", "my-web-app"):
+            plain = os.path.join(self.tmp, "plain", name)
+            os.makedirs(plain)
+            with self.subTest(name=name):
+                self.assertEqual(project_from_cwd(plain), name)
+
+    def test_a_dot_git_file_that_is_not_a_worktree_is_untouched(self):
+        """A submodule's .git is also a file, and points at .git/modules/..."""
+        sub = os.path.join(self.tmp, "vendor-lib")
+        os.makedirs(sub)
+        with open(os.path.join(sub, ".git"), "w", encoding="utf-8") as fh:
+            fh.write("gitdir: %s/host/.git/modules/vendor-lib\n" % self.tmp)
+        self.assertEqual(project_from_cwd(sub), "vendor-lib")
+        self.assertEqual(OBSERVED.branches, {})
+
+    def test_junk_in_the_dot_git_file_is_not_fatal(self):
+        for body in ("", "not a gitdir line\n", "gitdir:\n", "\x00\x01"):
+            d = os.path.join(self.tmp, "junk" + str(abs(hash(body)) % 997))
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, ".git"), "w", encoding="utf-8") as fh:
+                fh.write(body)
+            with self.subTest(body=body):
+                self.assertEqual(project_from_cwd(d), os.path.basename(d))
+
+    def test_the_codex_pool_shape_is_not_regressed(self):
+        """~/.codex/worktrees/<id>/<repo>: the leaf is already the repo, and
+        the path rule has to keep answering before the disk is consulted."""
+        self.assertEqual(
+            project_from_cwd("/Users/alice/.codex/worktrees/1860/finn"), "finn")
+        self.assertEqual(
+            project_from_cwd("/Users/alice/Projects/finn/.claude/worktrees/x"),
+            "finn")
+
+    def test_the_answer_is_cached_rather_than_restatted(self):
+        """A thousand sessions in one worktree must not be a thousand reads."""
+        import adapters.base as base
+        _repo, wt = make_linked_worktree(self.tmp)
+        reads = []
+        real = base._gitdir_target
+        base._gitdir_target = lambda p: (reads.append(p), real(p))[1]
+        self.addCleanup(setattr, base, "_gitdir_target", real)
+        for _ in range(50):
+            self.assertEqual(project_from_cwd(wt), "finn")
+        self.assertEqual(len(reads), 1)
+
+
+class TestSiblingWorktreeUnderTmp(unittest.TestCase):
+    """Ordering: the tmp label exists so a scratch directory NAME is never
+    published, and a repository checked out under $TMPDIR has a name that is
+    worth publishing -- the same one the pool rule has always preferred."""
+
+    def setUp(self):
+        self.tmp = os.path.realpath(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        clear_path_cache()
+        self.addCleanup(clear_path_cache)
+        OBSERVED.clear()
+        self.addCleanup(OBSERVED.clear)
+
+    def test_a_worktree_under_a_temp_root_is_its_repo_not_tmp(self):
+        _repo, wt = make_linked_worktree(self.tmp)
+        self.assertEqual(project_from_cwd(wt), "finn")
+
+    def test_a_plain_temp_directory_is_still_tmp(self):
+        plain = os.path.join(self.tmp, "scratch-build")
+        os.makedirs(plain)
+        self.assertEqual(project_from_cwd(plain), TMP_LABEL)
+
+
+class TestSiblingWorktreeLabelRepair(unittest.TestCase):
+    """What an ALREADY-INGESTED corpus can and cannot get back.
+
+    A pooled worktree encodes its own signature into the label
+    (`finn--claude-worktrees-native-ota`), so normalize_project() can undo it
+    from the string alone. A sibling worktree encodes nothing: the label is
+    `finn-loop-writer`, which is spelled exactly like a repository called
+    finn-loop-writer and must stay that way -- guessing would relabel real
+    repos. The pairing only exists on disk, so an old corpus is repaired only
+    when ingest's sidecar carried it over.
+    """
+
+    def test_the_label_alone_cannot_be_repaired(self):
+        for label in ("finn-loop-writer", "finn-loop-ship", "finn-i18n",
+                      "finn-writer-task-1945"):
+            with self.subTest(label=label):
+                self.assertEqual(normalize_project(label), label)
+
+    def test_the_sidecar_pairing_repairs_it_at_analyze_time(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        src = os.path.join(tmp, "events.ndjson")
+        labels = ["finn-loop-writer", "finn-loop-ship", "finn-loop-sim", "finn"]
+        with open(src, "w", encoding="utf-8") as fh:
+            for i, label in enumerate(labels):
+                for role, kind in (("user", "prompt"), ("assistant", "reply")):
+                    fh.write(json.dumps({
+                        "ts": "2026-08-0%dT10:00:00+00:00" % (i % 9 + 1),
+                        "tool": "claude_code", "session_id": "s%d" % i,
+                        "project": label, "role": role, "kind": kind,
+                        "text": "rebuild the deploy pipeline on main_writer "
+                                "and main_ship today",
+                        "ts_exact": True, "confidence": "exact",
+                    }) + "\n")
+        with open(os.path.join(tmp, "redact.json"), "w", encoding="utf-8") as fh:
+            json.dump({"branch_repos": {"finn-loop-writer": "finn",
+                                        "finn-loop-ship": "finn",
+                                        "finn-loop-sim": "finn",
+                                        "main_writer": "finn",
+                                        "main_ship": "finn"}}, fh)
+        out = os.path.join(tmp, "stats.json")
+        env = dict(os.environ)
+        env["VIBECHECKUP_REDACT_FILE"] = os.path.join(tmp, "no-such-file")
+        proc = subprocess.run(
+            [sys.executable, os.path.join(ROOT, "analyze.py"), "--in", src,
+             "--out", out, "--vocab", os.path.join(tmp, "vocab.json")],
+            capture_output=True, text=True, timeout=180, env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        with open(out, encoding="utf-8") as fh:
+            raw = fh.read()
+        stats = json.loads(raw)
+        self.assertEqual(sorted(stats["clouds"]["by_project"]), ["finn"])
+        self.assertEqual(stats["totals"]["projects"], 1)
+        for lit in ("finn-loop-writer", "finn-loop-ship", "finn-loop-sim",
+                    "main_writer", "main_ship"):
+            with self.subTest(lit=lit):
+                self.assertNotIn(lit, raw)
 
 
 class TestNeutralLabels(unittest.TestCase):

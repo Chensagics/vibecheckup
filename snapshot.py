@@ -12,6 +12,13 @@ as it being safe to send -- git is one way a file travels, not the only one.
 
 `--scrub` snapshots dashboard-shareable.html instead (build it first with
 `python3 build_dashboard.py --scrub`) and leaves stats.json behind.
+
+A snapshot outlives the code that built it, so what got redacted out of it is a
+property of that build and not of this checkout. Every page carries the
+redaction-schema version it was built under; `--list` reads it back and marks
+anything older than the rules in force today, because the fix for a snapshot
+built by a leakier version is to rebuild it, and nothing about the file says so
+on its own.
 """
 from __future__ import annotations
 
@@ -22,11 +29,32 @@ import shutil
 import sys
 import time
 
+from build_dashboard import HEAD_BYTES, REDACTION_SCHEMA, marker_version
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 DASH = os.path.join(HERE, "dashboard.html")
 SHARE = os.path.join(HERE, "dashboard-shareable.html")
 STATS = os.path.join(HERE, "data", "stats.json")
 SNAPS = os.path.join(HERE, "snapshots")
+STALE = "PRE-REDACTION, rebuild before sharing"
+
+
+def snapshot_schema(path):
+    """The redaction schema a snapshot page was built under.
+
+    0 for anything unmarked, which is the only answer available for a page
+    built before the marker existed -- and those are exactly the pages that
+    have to be flagged, so absence is treated as older rather than unknown.
+
+    Only the head is read. A snapshot is a megabyte of inlined stats and the
+    stamp is in the first line or two of it, so `--list` stays instant on a
+    directory that has been accumulating for a year.
+    """
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return marker_version(fh.read(HEAD_BYTES))
+    except OSError:
+        return 0
 
 
 def main():
@@ -47,11 +75,21 @@ def main():
         if not rows:
             print("no snapshots yet")
             return 0
+        stale = 0
         for f in rows:
             p = os.path.join(SNAPS, f)
             kind = "shareable" if f.endswith("-shareable.html") else "full copy"
+            if snapshot_schema(p) < REDACTION_SCHEMA:
+                kind += " — " + STALE
+                stale += 1
             print(f"  {f}  ({os.path.getsize(p)/1e6:.2f} MB, {kind})")
         print(f"\n{len(rows)} snapshot(s) in {SNAPS}")
+        if stale:
+            print(f"{stale} built under redaction rules older than this "
+                  f"checkout's (schema {REDACTION_SCHEMA}). Redaction is done "
+                  f"at build time, so an old page keeps whatever the old rules "
+                  f"let through — re-run the pipeline and snapshot again "
+                  f"before handing one of these to anybody.")
         return 0
 
     src = SHARE if args.scrub else DASH
@@ -91,6 +129,10 @@ def main():
     for p in saved:
         print(f"wrote {os.path.relpath(p, HERE)} ({os.path.getsize(p)/1e6:.2f} MB)")
     print(f"  {summary}")
+    if snapshot_schema(out_html) < REDACTION_SCHEMA:
+        print(f"  {STALE}: the page this was copied from was built under "
+              f"redaction rules older than schema {REDACTION_SCHEMA}. "
+              f"Re-run build_dashboard.py and snapshot again.")
     print(f"\nSelf-contained -- open it any time: file://{out_html}")
     if args.scrub:
         print("Copied from the scrubbed build: no project names, error text or")

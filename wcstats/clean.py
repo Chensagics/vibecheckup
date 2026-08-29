@@ -120,12 +120,33 @@ RE_EMAIL = re.compile(r"[\w.+\-]+@[\w\-]+(?:\.[\w\-]+)+")
 # .pl .so .cs .ml .in .el .pm .cc .cx) are left OUT, so `app.py` and
 # `server.ts` stay ordinary vocabulary. Shared by tokenize.keep() and by
 # facets.error_signature() so the two can never drift apart.
+#
+# The second block is the one a LAN actually uses, and it was the hole here:
+# every name below is reserved by an RFC precisely so that it can never be a
+# public TLD, which makes it a hostname suffix with no ambiguity at all.
+# `.local` is the one that matters most -- `hostname` on every Mac answers
+# `<account>-MacBook-Pro.local`, and that string rides along in ssh banners,
+# mDNS failures and a dev server's "Network:" line. Without it,
+# `janedoe-macbook-pro.local` was a vocabulary word.
+#
+#   local                RFC 6762 (mDNS)
+#   localhost            RFC 6761
+#   arpa                 RFC 3172 -- and `home.arpa` from RFC 8375
+#   internal lan corp home localdomain intranet private
+#                        RFC 6762 appendix G / RFC 8375: the suffixes home and
+#                        corporate networks are told to use, and do.
+#
+# `test`, `example` and `invalid` (also RFC 6761) are deliberately NOT here:
+# `Button.test` is a real filename stem and `foo.example` a real fixture name,
+# and neither is worth a hostname's worth of privacy. The rule matches a DOTTED
+# SUFFIX, so the bare words `local`, `home`, `private` and `lan` are untouched.
 HOSTNAME_TLDS = frozenset("""
 com org net int edu gov mil info biz name pro xyz app dev io co ai me tv
 cloud tech site online store shop blog page live life work team group email
 network systems solutions agency studio design media news wiki space fun
 uk de fr jp cn ru br it es nl se no dk fi ca au ch at be ie nz kr mx ar
 cl za pt gr cz hu ro tr ua sg hk tw vn th ph my il eu us gg
+local localhost localdomain internal intranet lan corp home private arpa
 """.split())
 
 RE_UUID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.I)
@@ -277,6 +298,24 @@ LABEL_PLACEHOLDER = "redacted"
 # rob, bill, jack, dawn, ray, joy, ivy, rose, sky). Anything the guard refuses
 # is still redactable by hand with --redact.
 MIN_IDENTITY_LEN = 5
+# ...but the length gate is a proxy for "we are GUESSING", and for two sources
+# we are not guessing at all: `[user] name` and the local part of `[user]
+# email` are the person, typed in by the person. A two-word display name is
+# where this bit: "Jane Doe" split into `jane` and `doe`, both four letters,
+# both thrown back by MIN_IDENTITY_LEN -- and the terminal still said the name
+# was masked. On this machine the same gate refused `chen` and `sagi`, and
+# vocab.json shipped chen x21 and sagi x3 out of "Hey Chen" and "Chen Sagi's
+# projects".
+#
+# So these two sources are gated by COMMON_WORDS alone, which is the guard that
+# was always doing the real work: a person called Art, Sky or Rose still keeps
+# the word, because the word is on the list. The floor below exists only to
+# stop a one-letter middle initial ("Jane Q Doe") becoming a literal that
+# matches every token starting with q.
+MIN_PERSONAL_LEN = 2
+# Literals shorter than this match at BOTH token edges rather than as a
+# run-on prefix -- see Redactor._pattern.
+EDGE_ANCHOR_LEN = MIN_IDENTITY_LEN
 # A branch name with no separator in it is just a word, so it has to clear a
 # higher bar than a compound like `combat-engine` before it is masked bare.
 MIN_BARE_BRANCH_LEN = 6
@@ -315,6 +354,10 @@ violet hunter chase cash king earl duke prince blaze storm rain star angel
 frank rich don guy hardy noble price stone wood ford banks brown white green
 gray grey black young long short small best fair love bell page reed hall
 ward cook fisher miller baker taylor turner walker parker carter cooper hayes
+eve kit pat sue dot tab hue rue bud van dale glen lane wade grant forest
+colt ace jet field shore moss vale bloom dove robin drake fox wolf bear
+hawk dean bay fern sage gene cane cliff heath ruth pearl noel wren lark
+root runner guest node owner host stack trunk rock reid
 main master trunk dev devel develop development staging stage prod production
 release releases hotfix feature features bugfix fix fixes test tests testing
 next canary beta alpha trunk integration sandbox experiment experimental wip
@@ -340,6 +383,17 @@ terms blog news press careers jobs about
 # the dashboard already publishes as a label, so the slug splits and only the
 # left half goes.
 RE_TOKENISH = re.compile(r"[0-9A-Za-z_.+#'’\-]+")
+# ...as a set, for walking outward from a match to the token edges. Derived
+# from the pattern rather than spelled twice, so the two cannot drift.
+_TOKENISH_SET = frozenset(
+    c for c in list(map(chr, range(32, 127))) + ["’"]
+    if RE_TOKENISH.fullmatch(c))
+
+# The separators one identity may be spelled with. A display name arrives from
+# git as "Jane Doe" and the same person's address as `jane.doe@`, so a literal
+# that was written with a SPACE has to be able to match every other spelling
+# too -- see Redactor._pattern for why only that direction is widened.
+RE_SEP = r"[._\-\s]+"
 
 # A GitHub/GitLab/Bitbucket-style remote, in either spelling:
 #   https://github.com/OWNER/repo.git      git@github.com:OWNER/repo.git
@@ -393,12 +447,13 @@ class Redactor:
     middle of a word, so a hypothetical identity `river` cannot eat `driver`.
     """
 
-    __slots__ = ("_lits", "_probe", "_anchor", "_cache")
+    __slots__ = ("_lits", "_probe", "_anchor", "_span", "_cache")
 
     def __init__(self, literals=()):
         self._lits = set()
         self._probe = None
         self._anchor = None
+        self._span = None
         # hits() is called once per surviving token -- millions of times over a
         # real corpus, against a vocabulary of only tens of thousands of
         # distinct strings. Memoizing turns the regex into a dict lookup.
@@ -427,27 +482,63 @@ class Redactor:
         return n
 
     @staticmethod
-    def _pattern(lit):
+    def _spans_whitespace(lit):
+        """True when this literal can only match across a token boundary."""
+        return bool(re.search(r"\s", lit or ""))
+
+    @classmethod
+    def _pattern(cls, lit):
         """One literal, spelled with any separator.
 
         `chen.sagi.cs`, `chen_sagi_cs` and `chen-sagi-cs` are one identity
         written three ways, and the corpus contained two of them. Same for a
         branch: `combat-engine` and `combat_engine` name the same branch.
+
+        A literal that arrives WITH a space -- git's `[user] name = Jane Doe`
+        is the one that matters -- also matches `jane.doe`, `jane-doe` and
+        `jane_doe`, because those are the same identity typed by the same
+        person. The widening is one-directional on purpose: `combat-engine`
+        must NOT start eating the two ordinary words "combat engine" out of
+        prose, so only a literal that was written with whitespace gains the
+        whitespace spelling.
         """
-        parts = re.split(r"[._\-]+", lit)
+        parts = re.split(RE_SEP, lit.strip()) if lit else []
         if len(parts) > 1 and all(parts):
-            return r"[._\-]+".join(re.escape(p) for p in parts)
-        return re.escape(lit)
+            sep = RE_SEP if cls._spans_whitespace(lit) else r"[._\-]+"
+            body = sep.join(re.escape(p) for p in parts)
+        else:
+            body = re.escape(lit)
+        # A SHORT literal is anchored at BOTH edges. The run-on rule -- match
+        # `chensagi` inside `chensagics` and take the whole token -- is right
+        # for a distinctive handle and catastrophic for a four-letter forename:
+        # `li` would eat list/line/link/library, `cs` would eat csv, `ana`
+        # would eat analysis. Requiring the far edge too keeps exactly the
+        # spellings a name actually takes in prose -- `chen`, `Chen's`,
+        # `chen-sagi`, `Hey Chen.` -- and nothing else. Long literals keep the
+        # run-on rule; they are distinctive enough to afford it.
+        if len(lit or "") < EDGE_ANCHOR_LEN:
+            body += r"(?![0-9A-Za-z])"
+        return body
 
     def _compile(self):
         # Longest first so an alternation prefers `graphify-ab-control` over
         # `graphify`; with whole-token removal the outcome is the same either
         # way, but it keeps the match spans honest for anyone debugging.
-        alt = "|".join(self._pattern(x) for x in
-                       sorted(self._lits, key=lambda s: (-len(s), s)))
+        ordered = sorted(self._lits, key=lambda s: (-len(s), s))
+        alt = "|".join(self._pattern(x) for x in ordered)
         self._probe = re.compile(alt, re.I)
         self._anchor = re.compile(
             r"(?:^|(?<=[^0-9A-Za-z]))(?:" + alt + r")", re.I)
+        # scrub() replaces one TOKENISH run at a time and a run never contains
+        # a space, so a literal that spans a token boundary could never fire
+        # there: `Redactor(['jane doe']).scrub('signed by Jane Doe')` used to
+        # return its input unchanged while the terminal reported `jane doe` as
+        # masked. Those literals get a pass of their own, over spans.
+        multi = [x for x in ordered if self._spans_whitespace(x)]
+        self._span = re.compile(
+            r"(?:^|(?<=[^0-9A-Za-z]))(?:"
+            + "|".join(self._pattern(x) for x in multi) + r")", re.I
+        ) if multi else None
         self._cache = {}
 
     @property
@@ -474,6 +565,28 @@ class Redactor:
             self._cache[token] = got
         return got
 
+    def _scrub_spans(self, text, placeholder):
+        """The pass for literals that cross a token boundary.
+
+        Same promise as the token pass -- the WHOLE token goes -- so each match
+        is grown outward to the edges of the tokens it touches before it is
+        replaced. `foo-jane doe.md` loses all of it, not just the middle.
+        """
+        out, pos, n = [], 0, len(text)
+        for m in self._span.finditer(text):
+            s, e = m.span()
+            if s < pos:
+                continue                       # inside a span already taken
+            while s > pos and text[s - 1] in _TOKENISH_SET:
+                s -= 1
+            while e < n and text[e] in _TOKENISH_SET:
+                e += 1
+            out.append(text[pos:s])
+            out.append(placeholder)
+            pos = e
+        out.append(text[pos:])
+        return "".join(out)
+
     def scrub(self, text: str, placeholder: str = " ") -> str:
         """Text in, text out, with every offending token replaced.
 
@@ -489,6 +602,8 @@ class Redactor:
         """
         if not text or not self._probe or not self._probe.search(text):
             return text
+        if self._span is not None:
+            text = self._scrub_spans(text, placeholder)
         return RE_TOKENISH.sub(
             lambda m: placeholder if self._anchor.search(m.group(0))
             else m.group(0),
@@ -619,14 +734,25 @@ def derive_identities(home=None, repo_configs=(), extra_git_configs=()):
          This is what catches an `owner/repo` slug whose owner is spelled
          differently from the local login.
 
+    Source 2 is the person, spelled by the person, so it is gated by
+    COMMON_WORDS alone (MIN_PERSONAL_LEN). Sources 1 and 3 are inferences --
+    a home directory can be `/root` and a remote owner can be an ORGANISATION
+    (`vercel`, `expo`, `npm`) rather than a human -- so they keep the length
+    gate as a second guard against masking an ordinary word.
+
     Returns (accepted, skipped) where skipped is [(literal, reason)] -- see
     identity_verdict for why anything is ever skipped.
     """
     home = home or os.path.expanduser("~")
-    cands = []
+    cands = []          # (literal, min_len)
+
+    def take(vals, min_len):
+        for v in vals:
+            cands.append((v, min_len))
+
     base = os.path.basename(str(home).rstrip("/"))
     if base:
-        cands.append(base)
+        take([base], MIN_IDENTITY_LEN)
     texts = [_read(p) for p in _git_config_files(home)]
     texts.extend(extra_git_configs or ())
     for text in texts:
@@ -634,23 +760,38 @@ def derive_identities(home=None, repo_configs=(), extra_git_configs=()):
             if section != "user":
                 continue
             if key == "name":
-                # A display name is often "Jane Doe": each word is a candidate,
-                # and the guard throws the short ones back.
-                cands.append(val)
-                cands.extend(val.split())
+                # A display name is often "Jane Doe". Both the whole name and
+                # each word are candidates: the words are what appears in
+                # prose ("Hey Chen"), and the whole name is the only thing
+                # left when one word is a COMMON_WORD ("Rose Smith" -> `rose`
+                # is refused, `rose smith` still masks the signature line).
+                take([val], MIN_PERSONAL_LEN)
+                take(val.split(), MIN_PERSONAL_LEN)
             elif key == "email":
-                cands.extend(identities_from_email(val))
-        cands.extend(owners_from_git_config(text))
+                take(identities_from_email(val), MIN_PERSONAL_LEN)
+        take(owners_from_git_config(text), MIN_IDENTITY_LEN)
     for text in repo_configs or ():
-        cands.extend(owners_from_git_config(text))
+        take(owners_from_git_config(text), MIN_IDENTITY_LEN)
 
-    accepted, skipped, seen = [], [], set()
-    for c in cands:
+    # One literal, one verdict: when a string arrives from two sources, the
+    # strongest (lowest gate) wins -- `janedoe` is both the home directory and
+    # the address's local part, and the address is the one that knows.
+    gate = {}
+    order = []
+    for c, min_len in cands:
         s = (c or "").strip().lower()
-        if not s or s in seen:
+        s = " ".join(s.split())
+        if not s:
             continue
-        seen.add(s)
-        ok, why = identity_verdict(s)
+        if s not in gate:
+            order.append(s)
+            gate[s] = min_len
+        else:
+            gate[s] = min(gate[s], min_len)
+
+    accepted, skipped = [], []
+    for s in order:
+        ok, why = identity_verdict(s, min_len=gate[s])
         (accepted if ok else skipped).append(s if ok else (s, why))
     return accepted, skipped
 
@@ -810,7 +951,67 @@ def build_redaction(home=None, repo_configs=(), branch_pairs=(), extra=(),
         "skipped": skipped + branch_skipped,
         "branch_mode": branch_mode,
     }
+    # A report that lies is worse than no report: anything the matcher cannot
+    # actually apply is moved out of the masked lists and named as NOT masked.
+    demote_unmatchable(report)
     return r, report
+
+
+# --- the report has to be true -----------------------------------------------
+
+# The buckets format_redaction() presents as "masked".
+MASKED_BUCKETS = ("identities", "branches", "decorated", "explicit")
+
+UNMATCHABLE_REASON = "the matcher cannot apply it"
+
+
+def literal_is_applicable(lit) -> bool:
+    """Can the matcher actually mask this literal anywhere?
+
+    The check the whole self-redaction promise rests on, and it runs both code
+    paths, because they are different: hits() consults the anchor directly and
+    is what tokenize.keep() calls, while scrub() rewrites TOKENISH runs and is
+    what clean_prose() calls. A literal containing a SPACE used to pass the
+    first and silently fail the second, which is how a two-word `user.name`
+    came to be printed as masked and published on the share card anyway.
+    """
+    s = (lit or "").strip()
+    if not s:
+        return False
+    probe = Redactor([s])
+    if not probe.hits(s):
+        return False
+    carrier = "zqx " + s + " zqx"
+    return probe.scrub(carrier) != carrier
+
+
+def unmatchable_literals(report):
+    """[(literal, bucket)] for everything the report claims but cannot mask."""
+    out = []
+    for bucket in MASKED_BUCKETS:
+        for lit in report.get(bucket) or ():
+            if not literal_is_applicable(lit):
+                out.append((lit, bucket))
+    return out
+
+
+def demote_unmatchable(report):
+    """Move unmaskable literals out of the masked lists and into `skipped`.
+
+    Returns the offenders. Mutates `report` in place: the terminal, the tests
+    and any caller reading the report all see the same, true, answer.
+    """
+    bad = unmatchable_literals(report)
+    if not bad:
+        return bad
+    dead = {lit for lit, _ in bad}
+    for bucket in MASKED_BUCKETS:
+        if report.get(bucket):
+            report[bucket] = [x for x in report[bucket] if x not in dead]
+    known = {s for s, _ in report.get("skipped") or ()}
+    report["skipped"] = list(report.get("skipped") or []) + [
+        (lit, UNMATCHABLE_REASON) for lit in sorted(dead) if lit not in known]
+    return bad
 
 
 def format_redaction(report, width=6):
@@ -819,6 +1020,15 @@ def format_redaction(report, width=6):
         items = list(items)
         head = ", ".join(items[:width])
         return head + (f" (+{len(items) - width} more)" if len(items) > width else "")
+
+    # Self-check, deliberately repeated here rather than trusted from
+    # build_redaction(): this function is what the user reads, so it is the
+    # last place that can stop it claiming something untrue. A report handed in
+    # from anywhere else -- a test, a sidecar, a future caller -- is verified
+    # too, and offenders come out under NOT masked instead.
+    report = dict(report)
+    report["skipped"] = list(report.get("skipped") or [])
+    demote_unmatchable(report)
 
     lines = []
     n = (len(report["identities"]) + len(report["branches"])
@@ -834,10 +1044,29 @@ def format_redaction(report, width=6):
                      f"spellings (worktree-<branch> and friends)")
     if report["explicit"]:
         lines.append(f"  --redact       {show(report['explicit'])}")
+    # The other half of the promise. A short literal is masked at both token
+    # edges (see Redactor._pattern), so `chen` covers `chen`, `Chen's` and
+    # `chen-sagi` and deliberately does NOT cover a longer word built on it.
+    # That is what stops `cs` deleting `csv` -- and it means a repo, org or
+    # product named after the person survives. Saying so is the whole F1
+    # lesson: a limitation the user is told about is one they can close.
+    short = sorted({x for b in MASKED_BUCKETS for x in (report.get(b) or ())
+                    if len(x) < EDGE_ANCHOR_LEN})
+    if short:
+        lines.append(f"  whole word only {show(short)}")
+        lines.append("                 short literals mask as whole words "
+                     "(name, name's, name-two) but never inside a longer one, "
+                     "or `cs` would delete `csv`.")
+        lines.append("                 A repo, org or product built on one "
+                     "(<name>site, <name>corp) is NOT masked -- pass --redact "
+                     "STR for it.")
     if report["skipped"]:
         pairs = ", ".join(f"{s} ({why})" for s, why in report["skipped"][:width])
         more = len(report["skipped"]) - width
         lines.append(f"  NOT masked     {pairs}{f' (+{more} more)' if more > 0 else ''}")
         lines.append("                 redacting these would delete real words; "
                      "pass --redact STR to force one.")
+        if any(why == UNMATCHABLE_REASON for _s, why in report["skipped"]):
+            lines.append("                 (a literal the matcher cannot apply is "
+                         "listed here rather than claimed as masked.)")
     return "\n".join(lines)

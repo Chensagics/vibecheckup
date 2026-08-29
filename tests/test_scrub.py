@@ -5,8 +5,9 @@ writes nothing outside a temporary directory.
 
 The blob is seeded with the exact classes of string the audit found inlined in
 dashboard.html: an account name, project and worktree directory names, raw
-error text and shell commands. Every test that matters here asks the same
-question -- can any of them still be found in the built page.
+error text, shell commands and the names of the MCP servers this machine is
+wired to. Every test that matters here asks the same question -- can any of
+them still be found in the built page.
 """
 from __future__ import annotations
 
@@ -36,6 +37,16 @@ COMMANDS = ["herdr", "herd.sh", "heartbeat.sh", "rotate.sh", "git"]
 SECRETS = [USER, "zorbaxics", "mejanreteam.zorbax.com", "com.acme.quillfish",
            "quillfish", "graphify-ab-control", "combat-engine",
            "dyslexic-type", "native-ota"]
+# The MCP servers this machine is wired to: a vendor list, read out of the
+# agent's configuration rather than typed by anybody. `meta-ads` on its own
+# asserts that its owner runs Meta ad accounts.
+MCP_TOOLS = ["mcp__meta-ads__ads_get_ad_entities",
+             "mcp__ios-simulator__ui_tap",
+             "mcp__ios-simulator__screenshot",
+             "mcp__claude-in-chrome__screenshot",
+             "mcp__claude_ai_Supabase__execute_sql"]
+MCP_SERVERS = ["meta-ads", "ios-simulator", "claude-in-chrome",
+               "claude_ai_Supabase"]
 
 
 def bucket(extra=None):
@@ -55,7 +66,9 @@ def bucket(extra=None):
         "distinctive_user": [{"t": "refactor", "n": 9, "z": 3.1},
                              {"t": "dyslexic-type", "n": 2, "z": 2.2}],
         "distinctive_assistant": [{"t": "done", "n": 4, "z": 1.4}],
-        "tools": [{"t": "Bash", "n": 20}],
+        "tools": ([{"t": "Bash", "n": 20}]
+                  + [{"t": t, "n": n} for n, t in
+                     zip((9, 8, 7, 6, 5), MCP_TOOLS)]),
         "extensions": [{"t": "py", "n": 12}, {"t": "quillfish", "n": 1}],
         "commands": [{"t": c, "n": 3} for c in COMMANDS],
         "errors": [{"t": e, "n": 2} for e in ERRORS],
@@ -276,6 +289,66 @@ class TestScrubRemovesIdentifiersFromTheKeptClouds(unittest.TestCase):
         self.assertIn(me.lower(), bd.account_names())
 
 
+class TestScrubRemovesTheMcpServerNames(unittest.TestCase):
+    """The tools facet is kept, and it used to keep `mcp__<server>__<tool>`
+    whole -- a complete inventory of the third-party servers the machine is
+    wired to, which is configuration read off the machine and not vocabulary
+    anybody typed. The server half goes; the verb stays, because dropping it
+    too would empty the Tools view on any machine that leans on MCP."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.scrubbed, cls.report = bd.scrub_stats(synthetic(), [USER])
+        cls.tools = cls.scrubbed["clouds"]["global"]["tools"]
+
+    def test_no_server_name_survives_anywhere(self):
+        clouds = self.scrubbed["clouds"]
+        buckets = [clouds["global"]] + [b for g in ("by_tool", "by_month")
+                                        for b in clouds[g].values()]
+        for b in buckets:
+            for d in b.get("tools", []):
+                for server in MCP_SERVERS:
+                    self.assertNotIn(server.lower(), d["t"].lower())
+                self.assertFalse(d["t"].startswith("mcp__"), d["t"])
+
+    def test_the_verb_survives_so_the_view_still_says_something(self):
+        terms = [d["t"] for d in self.tools]
+        self.assertIn("Bash", terms)
+        self.assertIn("mcp:ui_tap", terms)
+        self.assertIn("mcp:execute_sql", terms)
+
+    def test_two_servers_exposing_the_same_verb_fold_into_one_entry(self):
+        """A cloud with the same word in it twice draws it twice."""
+        rows = [d for d in self.tools if d["t"] == "mcp:screenshot"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["n"], 13, "counts add: 7 + 6")
+
+    def test_the_facet_is_still_sorted_by_count(self):
+        """The fold can move a term up, and the template renders in order."""
+        counts = [d["n"] for d in self.tools]
+        self.assertEqual(counts, sorted(counts, reverse=True))
+
+    def test_the_report_counts_what_it_stripped(self):
+        self.assertGreaterEqual(self.report["servers_stripped"],
+                                len(MCP_TOOLS))
+
+    def test_a_plain_tool_name_is_untouched(self):
+        self.assertEqual(bd.strip_mcp_server("Bash"), "Bash")
+        self.assertEqual(bd.strip_mcp_server("mcp"), "mcp")
+        self.assertEqual(bd.strip_mcp_server("mcp__onlytwoparts"),
+                         "mcp__onlytwoparts")
+
+    def test_the_tool_half_is_still_checked_for_names(self):
+        """Stripping the server must not smuggle anything past the filter."""
+        out, _ = bd.scrub_stats(
+            {"clouds": {"global": {"tools": [
+                {"t": "mcp__vendor__deploy_quillfish", "n": 3},
+                {"t": "mcp__vendor__ui_tap", "n": 2}]},
+                "by_project": {"quillfish": {}}}}, [])
+        self.assertEqual([d["t"] for d in out["clouds"]["global"]["tools"]],
+                         ["mcp:ui_tap"])
+
+
 class TestScrubbedPageCarriesNoneOfIt(unittest.TestCase):
     """The end-to-end claim: grep the built file, find nothing."""
 
@@ -287,7 +360,7 @@ class TestScrubbedPageCarriesNoneOfIt(unittest.TestCase):
     def test_the_unscrubbed_page_really_does_leak(self):
         """Without this the zero below could mean the fixture is empty."""
         blob = payload(self.plain).lower()
-        for s in SECRETS + ERRORS + ["herd.sh", "rotate.sh"]:
+        for s in SECRETS + ERRORS + MCP_SERVERS + ["herd.sh", "rotate.sh"]:
             self.assertIn(s.lower(), blob, s)
 
     def test_the_scrubbed_page_leaks_nothing(self):
@@ -296,10 +369,22 @@ class TestScrubbedPageCarriesNoneOfIt(unittest.TestCase):
             self.assertNotIn(s.lower(), blob, s)
         for s in ERRORS:
             self.assertNotIn(s.lower(), blob, s)
+        for s in MCP_SERVERS:
+            self.assertNotIn(s.lower(), blob, s)
         for s in ("herd.sh", "heartbeat.sh", "rotate.sh", "herdr"):
             self.assertNotIn(s, blob, s)
         for s in ("5b78b15b", "vercel"):
             self.assertNotIn(s, blob, s)
+
+    def test_both_pages_are_stamped_with_the_redaction_schema(self):
+        """A snapshot outlives the code that built it; snapshot.py --list
+        reads this back to say which pages predate today's rules."""
+        for page in (self.plain, self.shared):
+            self.assertEqual(bd.marker_version(page), bd.REDACTION_SCHEMA)
+
+    def test_the_stamp_is_outside_the_data_block(self):
+        """dashboard.html has to stay a verbatim copy of stats.json."""
+        self.assertNotIn(bd.MARKER, payload(self.plain))
 
     def test_the_scrubbed_page_still_parses_and_still_says_something(self):
         data = inlined(self.shared)

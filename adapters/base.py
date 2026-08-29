@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import tempfile
 import urllib.parse
 from dataclasses import dataclass, asdict
@@ -127,6 +128,9 @@ def mtime_iso(path: str) -> Optional[str]:
 #             it publishes the name verbatim AND splits one repo into a dozen
 #             fake projects. Attributed to <repo>; the branch is dropped, since
 #             anything kept here becomes a facet key and reaches stats.json.
+#             `git worktree add ../name` parks the same thing NEXT TO the repo,
+#             where the path carries no marker at all -- see
+#             _sibling_worktree_repo() for the one rule that needs the disk.
 #   temp dir  /tmp, /var/tmp, $TMPDIR. Labelled "tmp".
 #   home      the user's home directory (labelling it leaks the username) and
 #             "/". Labelled "~" and "unknown".
@@ -281,6 +285,125 @@ def _repo_from_worktree(parts):
     return None
 
 
+# --- linked worktrees parked outside any pool --------------------------------
+#
+# `git worktree add ../finn-loop-writer` is the ordinary way to make a
+# worktree, and it puts the checkout beside the repo rather than in a pool. The
+# path then has no `worktrees` segment for _repo_from_worktree() to see, so the
+# leaf -- a loop name, a task number, a branch -- became a project of its own:
+# one repo published as five, with the internal names attached.
+#
+# The only thing that distinguishes such a directory from an ordinary checkout
+# is on disk. A linked worktree's `.git` is a regular FILE holding
+# `gitdir: <repo>/.git/worktrees/<name>`, and that target is the same shape the
+# pool rule already decodes -- so resolving it folds the label onto <repo> and
+# registers <name> as an observed branch through exactly the same call.
+#
+# Cost: this is the only label rule that touches the filesystem, so it runs
+# only after the pure path rule has declined, it stops at the first `.git` it
+# finds, and every answer is memoised per directory. A corpus with a thousand
+# sessions in one worktree stats it once.
+RE_GITDIR = re.compile(r"^\s*gitdir:\s*(\S.*?)\s*$")
+_SIBLING_WALK_UP = 6      # a session may start well inside the worktree
+_SIBLING_CACHE_MAX = 20_000
+_SIBLING_CACHE = {}       # directory -> repo label, or None
+_MISS = object()
+
+
+def clear_path_cache():
+    """Forget what the disk said. For tests that build and tear down trees."""
+    _SIBLING_CACHE.clear()
+
+
+def _gitdir_target(dotgit: str) -> Optional[str]:
+    """The path a linked worktree's `.git` FILE points at, or None."""
+    try:
+        with open(dotgit, "r", encoding="utf-8", errors="replace") as fh:
+            head = fh.readline()
+    except OSError:
+        return None
+    m = RE_GITDIR.match(head or "")
+    return m.group(1) if m else None
+
+
+def _worktree_head_branch(admin: str) -> Optional[str]:
+    """The branch a linked worktree has checked out, per its admin HEAD.
+
+    The directory name and the branch are two different strings -- the
+    worktrees of one repo here are called `finn-loop-writer` while sitting on
+    `main_writer` -- and git prints the BRANCH into the hook and rebase
+    failures that become error signatures. Both have to reach the redaction
+    list or the fold hides the name in one place and publishes it in another.
+
+    A detached HEAD names no branch, and nothing is invented for it.
+    """
+    try:
+        with open(os.path.join(admin, "HEAD"), "r",
+                  encoding="utf-8", errors="replace") as fh:
+            head = fh.readline().strip()
+    except OSError:
+        return None
+    if head.startswith("ref:"):
+        ref = head[4:].strip()
+        if ref.startswith("refs/heads/"):
+            return ref[len("refs/heads/"):].strip() or None
+    return None
+
+
+def _linked_worktree_repo(wt_dir: str, dotgit: str) -> Optional[str]:
+    """`<dir>/.git` is a file -> the repo it is a worktree of, or None."""
+    target = _gitdir_target(dotgit)
+    if not target:
+        return None
+    if not os.path.isabs(target):
+        target = os.path.join(wt_dir, target)
+    admin = _depriv(os.path.normpath(target).rstrip("/"))
+    parts = [p for p in admin.split("/") if p]
+    # <repo>/.git/worktrees/<name> is a pooled path, so the pool decoder owns
+    # it: same repo answer, same OBSERVED.branch(<name>, <repo>) registration.
+    # Anything else -- a submodule's .git/modules/..., a relocated gitdir --
+    # is not a worktree and gets no label of its own.
+    if not parts or parts[-2:-1] != ["worktrees"]:
+        return None
+    repo = _repo_from_worktree(parts)
+    if not repo or repo == UNKNOWN:
+        return None
+    branch = _worktree_head_branch(admin)
+    if branch:
+        OBSERVED.branch(branch.lower(), repo.lower())
+    return repo
+
+
+def _sibling_worktree_repo(path: str) -> Optional[str]:
+    """Repo of the linked worktree `path` sits in, or None if it is not one."""
+    got = _SIBLING_CACHE.get(path, _MISS)
+    if got is not _MISS:
+        return got
+    repo = None
+    cur = path
+    for _ in range(_SIBLING_WALK_UP):
+        dotgit = os.path.join(cur, ".git")
+        try:
+            mode = os.stat(dotgit).st_mode
+        except (OSError, ValueError):
+            mode = None
+        if mode is not None:
+            # A real .git directory is an ordinary checkout, and calling its
+            # parent the project would relabel every subdirectory session in
+            # the corpus. Either way the walk stops at the first repository.
+            if not stat.S_ISDIR(mode):
+                repo = _linked_worktree_repo(cur, dotgit)
+            break
+        nxt = os.path.dirname(cur)
+        if not nxt or nxt == cur:
+            break
+        cur = nxt
+    if len(_SIBLING_CACHE) >= _SIBLING_CACHE_MAX:
+        _SIBLING_CACHE.clear()
+    _SIBLING_CACHE[path] = repo
+    return repo
+
+
 def project_from_cwd(cwd: Optional[str]) -> str:
     """Project label for the directory a session ran in.
 
@@ -300,6 +423,14 @@ def project_from_cwd(cwd: Optional[str]) -> str:
     repo = _repo_from_worktree(parts)
     if repo is not None:
         return repo or UNKNOWN
+    # Second, and the only rule that reads the disk: a linked worktree parked
+    # outside a pool is invisible in the path. It sits with the pool rule and
+    # ahead of the tmp and home rules on purpose -- a worktree is labelled by
+    # its repository wherever it happens to be parked, and one repo checked out
+    # under $TMPDIR is still that repo rather than "tmp".
+    repo = _sibling_worktree_repo(path)
+    if repo:
+        return repo
     if _is_temp(path):
         return TMP_LABEL
     if path == _home():
@@ -470,7 +601,8 @@ def _repo_root(path: str) -> Optional[str]:
 
     A linked worktree's `.git` is a FILE pointing elsewhere; skipped rather
     than followed, because the main checkout is in the same scan and carries
-    the same remotes.
+    the same remotes. The same file is what _sibling_worktree_repo() reads --
+    there it decides the LABEL, which is a different question.
     """
     cur = path
     for _ in range(_GIT_WALK_UP):

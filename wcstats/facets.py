@@ -91,7 +91,156 @@ SHELL_SUBCMD = {"git", "npm", "pnpm", "yarn", "docker", "cargo", "go", "kubectl"
                 "brew", "pip", "pip3", "vercel", "gh", "expo", "eas", "supabase"}
 
 
-def error_signature(text: str) -> str:
+# --- picking the line that IS the failure -------------------------------------
+#
+# The old rule was "the first line containing error|exception|failed|fatal|
+# traceback|cannot|not found|permission denied|refused", anywhere in the line,
+# over the whole body of any event an adapter had flagged. Those words are
+# ordinary English, and the shipped dashboard.html carried the result under
+# "What went wrong most": a product-curriculum sentence ("*(If you cannot lose
+# small, you cannot stay in the game.)*"), an agent-doctrine table row, a
+# skill's frontmatter `description:`, a JSON issue title, four lines of
+# application source (`if (errors.length) {`), a .gitignore entry
+# (`yarn-error.log*`) and a git push confirmation.
+#
+# A keyword now only counts where a machine puts one. Seven shapes, each of
+# them something no prose sentence does by accident.
+
+# Leading noise a diagnostic may still carry: indent, bullet, heading, glyph.
+_LEAD = r"[\s>*+\-#~•·▸►×✗✖❌⚠]{0,4}"
+# 1. the marker heads the line.
+RE_ERR_HEAD = re.compile(
+    r"^" + _LEAD + r"(?:error|errors|err|exception|failure|failed|fail|fatal|panic|"
+    r"panicked|traceback|critical|abort|aborted|refused|"
+    r"cannot|could\s+not|unable\s+to|no\s+such|not\s+found)\b", re.I)
+# ...and the STATUS words, which are only ever a fallback. `Exit code 1` heads
+# the body of a shell failure whose real diagnostic is ten lines further down,
+# so treating it as a marker would replace `SyntaxError: ...`, `fatal: not a
+# git repository` and `rg: PATH: No such file` with "Exit code N" -- 17
+# signatures collapsed onto one in a first pass over the real corpus.
+RE_ERR_STATUS = re.compile(
+    r"^" + _LEAD + r"(?:warning|warn|denied|timeout|timed\s+out|usage|"
+    r"exit\s+(?:code|status)|missing|invalid|no\s+text|nothing)\b", re.I)
+# 2. a program name, then the marker: `npm error code ENOTFOUND`, `rg: ...`.
+#    `err` and `fail` are left out on purpose -- with them, node's stack-trace
+#    preamble `  throw err;` outranked the `Error: Cannot find module` two
+#    lines below it.
+#    The program name is lower-case by convention (`npm`, `rg`, `task.sh`),
+#    which is what keeps a docstring's "Raises error if neither is available."
+#    out. Scoped flags rather than re.I so that stays true.
+RE_ERR_PROG = re.compile(
+    r"^\s*[a-z][\w.\-/]{0,19}[:\s]\s*(?i:error|errors|warning|fatal|failed)\b")
+# 3. a file:line:col or positional prefix, then the marker (eslint, make).
+RE_ERR_POS = re.compile(
+    r"^[\s\d:.\-]{1,24}(?:error|warning|fatal|failed|fail)\b", re.I)
+# 4. an exception CLASS name. Case-sensitive on purpose: `TypeError`,
+#    `ParserError`, `java.lang.ExceptionInInitializerError` are identifiers,
+#    while "the sanctioned exception to doctrine" is a sentence.
+RE_ERR_CLASS = re.compile(r"\b[A-Za-z_][\w.]*(?:Error|Exception)\b")
+# 5. a log level, bracketed or standing alone in caps. `COL_ERROR` is safe:
+#    `_` is a word character, so there is no boundary in front of ERROR.
+RE_ERR_LEVEL = re.compile(
+    r"[\[<(:]\s*(?:ERROR|ERR|FATAL|WARN|WARNING|CRITICAL|PANIC)\s*[\]>):]"
+    r"|\b(?:ERROR|FATAL|PANIC|ABORTED|CRITICAL|FAILED|FAIL|ERR)\b"
+    r"|\bERR!")
+# 6. fixed diagnostic idioms and codes -- compiler codes (`error TS2724`),
+#    `(os error 2)`, an errno, an `<...error...>` tag, and the shell's four.
+#    The errno list is spelled out rather than matched as E[A-Z]+, which would
+#    have read ENGINE and EVERY in a shouty prose line as failures.
+RE_ERR_IDIOM = re.compile(
+    r"\berror\s*[\[(]?[A-Z]{1,5}\d{2,}"
+    r"|\(\s*(?:os\s+)?error\s+\d+\s*\)"
+    r"|\bE(?:ACCES|ADDRINUSE|AGAIN|BADF|BUSY|CANCELED|CHILD|CONNREFUSED|"
+    r"CONNRESET|EXIST|FAULT|HOSTUNREACH|INTR|INVAL|IO|ISDIR|MFILE|NETUNREACH|"
+    r"NFILE|NOENT|NOEXEC|NOMEM|NOSPC|NOTDIR|NOTEMPTY|NOTFOUND|NOTSUP|NXIO|"
+    r"PERM|PIPE|PROTO|RANGE|RESOLVE|ROFS|SPIPE|SRCH|TIMEDOUT|USAGE)\b"
+    r"|<[\w:.\-]*error[\w:.\-]*>"
+    r"|\bnot\s+found\b|\bno\s+such\s+file\b|\bpermission\s+denied\b"
+    r"|\bconnection\s+refused\b|\boperation\s+not\s+permitted\b"
+    # `awk: syntax error at source line 1`, `(eval):26: parse error near`
+    r"|\b(?:syntax|parse|type|runtime|internal|compile|compilation|io|os)"
+    r"\s+error\b", re.I)
+# 7. an `error:` LABEL. SINGULAR only, and that is the whole trick: a machine
+#    writes `error:` / `fatal:` / `Parse Error:`, while prose that mentions
+#    failure writes the plural -- "...to collect current errors:",
+#    "- gaps: 88 (errors: 88, warnings: 0)", `"errors": []`.
+RE_ERR_LABEL = re.compile(
+    r"\b(?:error|exception|failure|fatal|warning|traceback|panic)\s*:", re.I)
+
+# Lines that are SOURCE rather than output. A grep hit, a stack-trace preamble
+# and a file the agent read all arrive inside a tool result, and no keyword
+# rule can tell `if (errors.length) {` or `const COL_ERROR: Color = ...` from a
+# failure. Deliberately narrow: a general "looks like markup" test would eat
+# `<tool_use_error>...`, which is the single most common real diagnostic here.
+RE_SOURCE_LINE = re.compile(
+    r"^\s*(?:const|let|var|function|def|class|import|export|from|return|throw|"
+    r"raise|if|elif|else|for|while|try|except|catch|finally|switch|case|await|"
+    r"async|public|private|protected|static|package|impl|fn|struct|enum)\b"
+    r"|[;{]\s*$"
+    r"|^\s*(?://|/\*|\*\s)")
+
+# Two passes, not one: the whole body is searched for a real diagnostic before
+# any status line is considered, because they are not in reading order. A tool
+# result opens with `Exit code 1` and only then prints the traceback.
+ERR_TESTS_STRONG = (RE_ERR_HEAD, RE_ERR_PROG, RE_ERR_POS, RE_ERR_CLASS,
+                    RE_ERR_LEVEL, RE_ERR_IDIOM, RE_ERR_LABEL)
+ERR_TESTS_WEAK = (RE_ERR_STATUS,)
+
+# With no marker anywhere, the event can still be a real failure: the harness's
+# own refusals say so in plain English ("This session is isolated in the
+# worktree ...", "The user doesn't want to proceed with this tool use.",
+# "Exit code 1") and they are the single largest group in the corpus. What
+# separates them from a document that merely mentions errors is length -- they
+# are a sentence or two, not a file. A non-zero exit_code attests the same
+# thing and lifts the limit.
+FALLBACK_MAX_LINES = 40
+FALLBACK_MAX_CHARS = 2000
+
+# ...and the fallback line has to look like a MESSAGE. Every harness refusal in
+# the corpus is a plain sentence; none of them is a markdown heading, a table
+# row, a bullet, a numbered step or a JSON fragment. Requiring that is what
+# stops the first line of a design note ("# Day trading, week 2") standing in
+# for a failure when the rest of the note has no marker either.
+RE_NOT_A_MESSAGE = re.compile(
+    r"^(?:#{1,6}\s|\||>\s|[-*+]\s|\d+[.)]\s|[\"'`\[{])"
+    r"|\*\*")
+
+
+def looks_machine(line: str, weak: bool = True) -> bool:
+    """True when this line carries a diagnostic marker where a machine puts one.
+
+    `weak` includes the status lines (`Exit code 1`, `usage: ...`), which say
+    that something failed without saying what.
+    """
+    s = (line or "").strip()
+    if not s or RE_SOURCE_LINE.search(s):
+        return False
+    tests = ERR_TESTS_STRONG + ERR_TESTS_WEAK if weak else ERR_TESTS_STRONG
+    return any(rx.search(s) for rx in tests)
+
+
+def error_line(text: str, exit_code=None) -> str:
+    """The line of `text` that IS the failure, or "" when none of it is."""
+    if not text:
+        return ""
+    body = RE_ANSI.sub(" ", text)
+    lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
+    candidates = [s for s in lines if not RE_SOURCE_LINE.search(s)]
+    for tests in (ERR_TESTS_STRONG, ERR_TESTS_WEAK):
+        for s in candidates:
+            if any(rx.search(s) for rx in tests):
+                return s
+    if not candidates:
+        return ""
+    attested = isinstance(exit_code, int) and exit_code != 0
+    if not attested and (len(body) > FALLBACK_MAX_CHARS
+                         or len(lines) > FALLBACK_MAX_LINES):
+        return ""
+    head = candidates[0]
+    return "" if RE_NOT_A_MESSAGE.search(head) else head
+
+
+def error_signature(text: str, exit_code=None) -> str:
     """Collapse a failure message to a comparable signature.
 
     A signature is meant to be the *shape* of a failure, so anything
@@ -101,20 +250,13 @@ def error_signature(text: str) -> str:
     paths, relative paths and owner/slug pairs, @handles, hostnames, hashes,
     commit subjects, numbers -- and then only the first sentence is kept, which
     is what drops a vendor's paragraph or a trailing working directory.
+
+    `exit_code` is optional attestation from the event: a non-zero one means
+    something really did fail, and lifts the size limit on the fallback line.
     """
-    if not text:
-        return ""
-    line = ""
-    for ln in text.splitlines():
-        s = ln.strip()
-        low = s.lower()
-        if any(k in low for k in ("error", "exception", "failed", "fatal",
-                                  "traceback", "cannot", "not found",
-                                  "permission denied", "refused")):
-            line = s
-            break
+    line = error_line(text, exit_code)
     if not line:
-        line = (text.strip().splitlines() or [""])[0]
+        return ""
     line = RE_ANSI.sub(" ", line)
     # Quotes first: quoted free text is already the most volatile part of a
     # message, and collapsing it whole keeps the later rules off its insides.

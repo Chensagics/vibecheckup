@@ -13,6 +13,11 @@ the shell commands the agents ran. That file is a private artifact.
 of the same stats: the facets that hold strings harvested from your machine are
 removed, and what is left is aggregated vocabulary and counts. See scrub_stats()
 for the exact rules and README.md for what that does and does not promise.
+
+Both files are stamped with REDACTION_SCHEMA, the version of those rules. A
+dated copy of a dashboard outlives the code that built it, so `snapshot.py
+--list` reads the stamp back and says so when a snapshot predates the rules in
+force today.
 """
 from __future__ import annotations
 
@@ -50,11 +55,44 @@ DROPPED_FACETS = ("commands", "errors")
 
 # A dot between two word characters means an identifier, not prose: a filename
 # (combat_screen.gd), a hostname (mejanreteam.example.com), a bundle id
-# (com.acme.finn) or an attribute path (gamestore.advanceday).
+# (com.acme.finn) or an attribute path (gamestore.advanceday). It is a rule
+# about the DOT, and nothing else: an undotted hostname, org or container name
+# (buildbox, acmecorp-prod-eu) reads as prose here and survives.
 DOTTED = re.compile(r"\w\.\w")
 # Paths, handles and URLs. None survive the cleaner today; the rule is here so
 # that a change upstream cannot quietly start leaking them.
 PATHISH = re.compile(r"[\\/@]|https?:")
+
+# `mcp__<server>__<tool>` in the tools facet names a third-party MCP server the
+# user connected. That server list is configuration read off the machine, not
+# vocabulary the user typed, and it is a list of vendors: mcp__meta-ads__*
+# asserts "this person runs Meta ad accounts". The server half goes. The tool
+# half stays, because it says what was DONE -- ui_tap, execute_sql -- and on a
+# machine that leans on MCP it is over half the Tools cloud for its main agent.
+MCP = re.compile(r"^mcp__(.+?)__(.+)$", re.I)
+MCP_KEPT = "mcp:"
+
+# The redaction rules a page was built under. Bump it whenever those rules
+# change -- a string that used to survive stops surviving, or a facet stops
+# being kept -- so that a page built by the older, leakier code can be told
+# apart from a current one. Every build stamps it as an HTML comment OUTSIDE
+# the inlined payload, which is what keeps dashboard.html a byte-for-byte copy
+# of stats.json. snapshot.py --list reads it back; a page with no marker at all
+# predates the marker and so predates every rule below.
+REDACTION_SCHEMA = 1
+MARKER = "vibecheckup-redaction-schema"
+# Anchored on the comment delimiters: render() escapes every "<" in the
+# payload, so a "<!--" cannot occur inside the inlined data. Log text that
+# happens to contain the marker word therefore cannot forge a version.
+RE_MARKER = re.compile(r"<!--\s*" + re.escape(MARKER) + r":\s*(\d+)\s*-->")
+# The stamp goes at the top, straight after the opening tags: reading a
+# snapshot's first few kilobytes is then enough to date it, and the marker
+# stays well clear of the data block, where a "<!--" would be a parser bug.
+RE_HEAD = re.compile(r"^\s*(?:<!doctype[^>]*>\s*)?(?:<html[^>]*>\s*)?", re.I)
+# How much of a built page has to be read to find the stamp. Generous by two
+# orders of magnitude; a page that somehow hides it deeper reads as unstamped,
+# which is the safe direction to be wrong in.
+HEAD_BYTES = 8192
 
 
 def account_names(extra=()):
@@ -120,6 +158,54 @@ def _leaks(text, accounts, projects):
     return any(p.search(t) for p in projects)
 
 
+def strip_mcp_server(term):
+    """mcp__meta-ads__ads_get_ad_entities -> mcp:ads_get_ad_entities.
+
+    Anything that is not an `mcp__server__tool` triple comes back unchanged.
+    """
+    m = MCP.match((term or "").strip())
+    return MCP_KEPT + m.group(2) if m else term
+
+
+def _merge_terms(items):
+    """Fold entries that became identical once the server name was removed.
+
+    Two servers can expose the same verb, and a cloud with the same word in it
+    twice renders it twice. Counts add; the surviving entry keeps the fields of
+    the first (highest-count) of the pair, and the list is re-sorted because
+    the fold can move a term up.
+    """
+    out, by_term = [], {}
+    for d in items:
+        seen = by_term.get(d.get("t"))
+        if seen is None:
+            by_term[d.get("t")] = d
+            out.append(d)
+        else:
+            seen["n"] = (seen.get("n") or 0) + (d.get("n") or 0)
+    out.sort(key=lambda d: -(d.get("n") or 0))
+    return out
+
+
+def stamp(html, version=REDACTION_SCHEMA):
+    """Write the redaction-schema marker into a built page.
+
+    Placed in the document head rather than in the data block: the unscrubbed
+    page has to stay a verbatim copy of stats.json so a snapshot of it can
+    still be re-analysed later. After the doctype and the <html> tag, so the
+    page does not fall into quirks mode and the language is still declared
+    before anything else.
+    """
+    at = RE_HEAD.match(html or "").end()
+    return f"{html[:at]}<!-- {MARKER}: {version} -->\n{html[at:]}"
+
+
+def marker_version(html):
+    """The redaction schema a built page was produced under, 0 if unmarked."""
+    m = RE_MARKER.search(html or "")
+    return int(m.group(1)) if m else 0
+
+
 def scrub_stats(stats, extra_names=()):
     """Return (shareable stats, report).
 
@@ -131,8 +217,17 @@ def scrub_stats(stats, extra_names=()):
       * every `commands` list    -- the shell commands the agents ran.
       * activity.top_projects    -- names replaced by "project 01", counts kept.
       * activity.session_lengths -- session ids replaced by "session 01".
+      * the MCP server half of every tool name: mcp__meta-ads__ads_get_ad_
+        entities becomes mcp:ads_get_ad_entities, so the page stops carrying an
+        inventory of the third-party servers this machine is wired to.
       * any single term or phrase in a kept cloud that matches an account name,
-        a project name, or looks like a filename, hostname or path.
+        or a project name, or carries a dot between two word characters -- a
+        filename, hostname, bundle id or attribute path.
+
+    Note what the dot rule does NOT catch, because it is a rule about the dot:
+    an undotted hostname, org, container or hardware name (buildbox,
+    acmecorp-prod-eu, macbookpro18) is indistinguishable from prose here and
+    survives. Widening it would cost real vocabulary; --redact is the answer.
 
     What stays: the global and per-tool prose clouds, phrases, per-month
     clouds, trends, spend, the activity histograms and Wrapped. Those are your
@@ -144,7 +239,8 @@ def scrub_stats(stats, extra_names=()):
     projects = _name_patterns(project_names(stats))
     report = {"accounts": sorted(accounts),
               "projects": len(project_names(stats)),
-              "terms_dropped": 0, "facets_dropped": 0, "buckets": 0}
+              "terms_dropped": 0, "facets_dropped": 0, "buckets": 0,
+              "servers_stripped": 0}
 
     def notice_list():
         report["facets_dropped"] += 1
@@ -162,10 +258,19 @@ def scrub_stats(stats, extra_names=()):
             if facet in DROPPED_FACETS:
                 bucket[facet] = notice_list()
             elif term_list(items):
-                kept = [d for d in items
-                        if not _leaks(d.get("t"), accounts, projects)]
+                kept, stripped = [], 0
+                for d in items:
+                    term = strip_mcp_server(d.get("t"))
+                    if term != d.get("t"):
+                        d = dict(d, t=term)
+                        stripped += 1
+                    # After the rename, not before: the tool half still has to
+                    # answer for an account or project name inside it.
+                    if not _leaks(term, accounts, projects):
+                        kept.append(d)
                 report["terms_dropped"] += len(items) - len(kept)
-                bucket[facet] = kept
+                report["servers_stripped"] += stripped
+                bucket[facet] = _merge_terms(kept) if stripped else kept
 
     clouds = out.get("clouds")
     if isinstance(clouds, dict):
@@ -265,7 +370,8 @@ def parse_args(argv):
         description="Inline data/stats.json into dashboard_template.html.")
     ap.add_argument("--scrub", action="store_true",
                     help="also write a shareable copy with project names, "
-                         "error text and shell commands removed")
+                         "error text, shell commands and MCP server names "
+                         "removed")
     ap.add_argument("--out", metavar="PATH",
                     help="where the scrubbed copy goes "
                          "(default dashboard-shareable.html)")
@@ -302,7 +408,7 @@ def main(argv=()):
         return 1
 
     with open(OUT, "w", encoding="utf-8") as fh:
-        fh.write(render(raw, html))
+        fh.write(stamp(render(raw, html)))
     print(f"wrote {OUT} ({os.path.getsize(OUT)/1e6:.2f} MB, self-contained)")
     print(f"  schema v{stats['schema_version']} · "
           f"{stats['totals']['sessions']:,} sessions · "
@@ -315,12 +421,16 @@ def main(argv=()):
         dest = args.out or SCRUB_OUT
         payload = json.dumps(shared, ensure_ascii=False, separators=(",", ":"))
         with open(dest, "w", encoding="utf-8") as fh:
-            fh.write(render(payload, html))
+            fh.write(stamp(render(payload, html)))
         print(f"wrote {dest} ({os.path.getsize(dest)/1e6:.2f} MB, shareable)")
         print(f"  dropped {report['facets_dropped']} facets "
               f"({report['projects']} project names, every errors and commands "
               f"list) and {report['terms_dropped']:,} terms across "
               f"{report['buckets']} clouds")
+        if report["servers_stripped"]:
+            print(f"  stripped the MCP server name off "
+                  f"{report['servers_stripped']:,} tool entries — the verb is "
+                  f"kept, the vendor is not")
         print("  the remaining clouds are still your own words — read them "
               "before you hand this over")
 

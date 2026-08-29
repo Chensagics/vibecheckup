@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage 2: data/events.ndjson -> data/stats.json (+ a vocab.json sidecar
+"""Stage 2: data/events.ndjson -> data/stats.json (+ a gated vocab.json sidecar
 written beside it)
 
 Fails loudly on an empty or malformed event stream. A corpus that yields no
@@ -23,6 +23,12 @@ from datetime import date, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from adapters.base import OBSERVED, normalize_project  # noqa: E402
+# Stage 3 owns the definition of "this cloud entry is a string off the machine,
+# not a word somebody typed" -- it is the rule the shareable dashboard is built
+# on. Imported rather than restated: two copies of a privacy filter drift, and
+# the copy that drifts is the one that stops catching things.
+from build_dashboard import (_leaks as looks_harvested,  # noqa: E402
+                             _name_patterns, account_names)
 from wcstats.clean import (BRANCH_MODES, LABEL_PLACEHOLDER,  # noqa: E402
                            REDACT_HELP, build_redaction, format_redaction,
                            install_redactor, prose_text)
@@ -57,8 +63,10 @@ def vocab_path(out):
 
 # --- self-redaction setup ----------------------------------------------------
 #
-# stats.json and vocab.json are the two files a user hands to somebody else, so
-# this is the boundary that has to hold. Three things feed it:
+# stats.json is what a user hands to somebody else -- vocab.json is the same
+# vocabulary with the top-N cut taken off, which is a much longer tail and a
+# much worse thing to hand over ungated (see gate_vocab). Either way this is
+# the boundary that has to hold. Three things feed it:
 #
 #   * the identities of whoever is running the tool -- account name, git
 #     name/email, the account half of the git remotes ingest saw. A username
@@ -106,7 +114,15 @@ def scan_project_labels(path):
 
 
 def load_sidecar(inp):
-    """ingest.py's redact.json, if this corpus has one."""
+    """ingest.py's redact.json, if this corpus has one.
+
+    Returns (buckets for build_redaction, path). Its `branch_repos` mapping is
+    fed straight into OBSERVED instead: it is not a redaction bucket but the
+    branch -> repo pairing label_fixer() needs, and only ingest could see it.
+    A sibling-directory worktree is the case that depends on it -- a label like
+    `finn-loop-writer` is textually indistinguishable from a repository of that
+    name, so without the pairing an old corpus can only mask it, not fold it.
+    """
     path = os.path.join(os.path.dirname(os.path.abspath(inp)), REDACT_NAME)
     try:
         with open(path, encoding="utf-8") as fh:
@@ -120,6 +136,11 @@ def load_sidecar(inp):
         vals = data.get(key)
         if isinstance(vals, list):
             out[key] = [v for v in vals if isinstance(v, str)]
+    pairs = data.get("branch_repos")
+    if isinstance(pairs, dict):
+        for branch, repo in pairs.items():
+            if isinstance(branch, str) and isinstance(repo, str):
+                OBSERVED.branch(branch.strip().lower(), repo.strip().lower())
     return out, path
 
 
@@ -148,6 +169,13 @@ def label_fixer(redactor):
     to the repo the branch belongs to when ingest saw the pairing -- which is
     strictly better than masking, since the events really do belong to that
     repo -- and masked when it did not.
+
+    This is also the whole of what an old corpus gets for a SIBLING-directory
+    worktree. `finn-loop-writer` has no pool marker and no doubled dash: it is
+    spelled exactly like a repository called finn-loop-writer, so
+    normalize_project() cannot and must not touch it. It folds here only when
+    ingest's sidecar carried the pairing, and otherwise it stays a project of
+    its own until the next ingest.
     """
     branch_repo = {b: r for b, r in OBSERVED.pairs() if r}
 
@@ -224,12 +252,104 @@ def command_label(cmd):
     return head, sub
 
 
+# --- the vocab.json sidecar --------------------------------------------------
+#
+# vocab.json is stats.json's clouds with the top-N cut taken OFF. That makes it
+# the more dangerous of the two files, not the safer one, and it shipped with
+# no gate at all: the owner's forename and surname, a laptop model identifier
+# lifted out of a pasted crash report, a private repo name, opaque
+# high-entropy blobs out of thinking events, and three thousand dotted
+# filenames -- an inventory of the source trees of unreleased products. None of
+# it appears in stats.json, because all of it lives below rank 300.
+#
+# So the tail gets the treatment the top already gets, plus the two rules that
+# only matter once you are past rank 300:
+#
+#   * the shape filter the shareable dashboard uses (looks_harvested): dotted
+#     identifiers, paths, handles, URLs, the local account names and the
+#     project names. A `<component>.tsx` is not vocabulary in any sense --
+#     nobody "used the word" -- and a vocabulary file is exactly where a
+#     source-tree listing should not be.
+#   * a frequency floor. A term seen once carries no frequency information at
+#     all; what it carries is the fact that this corpus contains it, which is
+#     the half of the file with no analytical value and all of the exposure.
+#     Half the user vocabulary and 43% of the assistant vocabulary is hapax,
+#     and every opaque blob and the laptop identifier were in it.
+#
+# Errors are dropped outright. An error signature is not a word: it is a
+# sentence quoted off the machine, and a filter that judges single terms by
+# their shape cannot vet one. stats.json keeps the top 40 for the private
+# dashboard, which is where raw failure text belongs.
+VOCAB_MIN_COUNT = 2
+# ...but only once there is a tail to speak of. In a corpus of forty distinct
+# words a hapax is not the tail, it is the corpus, and a floor there would hand
+# back an empty file instead of a gated one.
+VOCAB_FLOOR_MIN_TERMS = 400
+VOCAB_ABOUT = (
+    "Full-length vocabulary tail behind stats.json. GATED, not raw: "
+    "redacted literals, filename/path/handle-shaped tokens, account and "
+    "project names, and terms seen only once are removed, and error "
+    "signatures are not included at all. Still your own words about your own "
+    "work — read it before you hand it to anybody."
+)
+
+
+def gate_vocab(bucket, redactor, projects, floor=VOCAB_MIN_COUNT,
+               floor_min_terms=VOCAB_FLOOR_MIN_TERMS):
+    """The global bucket -> the payload vocab.json is allowed to carry.
+
+    Returns (payload, report). The report is counts only -- naming the dropped
+    terms would put them straight back into the file they were dropped from.
+    """
+    accounts = account_names()
+    pats = _name_patterns(projects)
+    report = {"seen": 0, "kept": 0, "redacted": 0, "harvested": 0, "rare": 0,
+              "floor": floor, "floored": []}
+
+    def gate(counter, name, apply_floor):
+        items = counter.most_common()
+        report["seen"] += len(items)
+        use_floor = apply_floor and len(items) >= floor_min_terms
+        if use_floor:
+            report["floored"].append(name)
+        out = []
+        for i, (term, n) in enumerate(items):
+            # most_common() is sorted descending, so the floor ends the list
+            # and everything after it is rare by definition.
+            if use_floor and n < floor:
+                report["rare"] += len(items) - i
+                break
+            # Normally zero: clean_prose() already scrubbed the redactor's
+            # literals out of the text before it was tokenized. Kept as a
+            # second pass because the counters this reads are also fed by
+            # paths that do not go through clean_prose (tools, commands), and
+            # because a gate that trusts an upstream stage is a gate that
+            # stops holding the day that stage changes.
+            if redactor.hits(term):
+                report["redacted"] += 1
+            elif looks_harvested(term, accounts, pats):
+                report["harvested"] += 1
+            else:
+                out.append([term, n])
+        report["kept"] += len(out)
+        return out
+
+    return {
+        "_about": VOCAB_ABOUT,
+        "prose_user": gate(bucket.prose_user, "prose_user", True),
+        "prose_assistant": gate(bucket.prose_asst, "prose_assistant", True),
+        "tools": gate(bucket.tools, "tools", False),
+        "commands": gate(bucket.commands, "commands", False),
+    }, report
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--in", dest="inp", default=IN)
     ap.add_argument("--out", default=OUT)
     ap.add_argument("--vocab", default=None,
-                    help="full-count sidecar; defaults to vocab.json beside --out")
+                    help="gated full-length vocabulary tail (no top-N cut); "
+                         "defaults to vocab.json beside --out")
     ap.add_argument("--top", type=int, default=300)
     ap.add_argument("--redact", action="append", default=[], metavar="STR",
                     help=REDACT_HELP)
@@ -496,15 +616,13 @@ def main():
         },
     }
 
+    vocab, vocab_report = gate_vocab(
+        g, redactor, [p for p in F.keys("project") if p != "unknown"])
+
     with open(args.out, "w", encoding="utf-8") as fh:
         json.dump(stats, fh, ensure_ascii=False, separators=(",", ":"))
     with open(vocab_out, "w", encoding="utf-8") as fh:
-        json.dump({"prose_user": g.prose_user.most_common(),
-                   "prose_assistant": g.prose_asst.most_common(),
-                   "tools": g.tools.most_common(),
-                   "commands": g.commands.most_common(),
-                   "errors": g.errors.most_common()},
-                  fh, ensure_ascii=False, separators=(",", ":"))
+        json.dump(vocab, fh, ensure_ascii=False, separators=(",", ":"))
 
     size = os.path.getsize(args.out)
     print(f"events read      {total:,}  (malformed lines: {bad})")
@@ -536,8 +654,17 @@ def main():
           f"{w['longest_streak_days']}-day streak, peak {w['peak_hour']:02d}:00 "
           f"{w['peak_weekday']}, politeness {dict(w['politeness'])}")
 
+    vr = vocab_report
     print(f"\nwrote {args.out} ({size/1e6:.2f} MB) + {vocab_out} "
-          f"in {time.time()-t0:.1f}s")
+          f"({os.path.getsize(vocab_out)/1e6:.2f} MB) in {time.time()-t0:.1f}s")
+    print(f"vocab gate       kept {vr['kept']:,} of {vr['seen']:,} terms — "
+          f"dropped {vr['redacted']:,} redacted, {vr['harvested']:,} "
+          f"filename/path/name-shaped, {vr['rare']:,} seen fewer than "
+          f"{vr['floor']} times"
+          + (f" (floor on {', '.join(vr['floored'])})" if vr["floored"]
+             else " (no floor: too few terms to have a tail)"))
+    print("                 error signatures are not in it; stats.json keeps "
+          "the top 40 for the private dashboard.")
     return 0
 
 

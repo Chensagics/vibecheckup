@@ -24,7 +24,8 @@ sys.path.insert(0, ROOT)
 
 from wcstats.clean import (HOSTNAME_TLDS, RE_WINPATH, _drop_line,  # noqa: E402
                           clean_prose)
-from wcstats.facets import FILE_EXTS, RE_EXT, error_signature  # noqa: E402
+from wcstats.facets import (FILE_EXTS, RE_EXT,  # noqa: E402
+                            error_signature, looks_machine)
 from wcstats.tokenize import keep, tokens  # noqa: E402
 
 
@@ -223,6 +224,127 @@ class TestAddressesAndHostnames(unittest.TestCase):
             self.assertNotIn(ext, HOSTNAME_TLDS, ext)
 
 
+# --- 3b. LAN hostnames ------------------------------------------------------
+
+class TestSpecialUseHostnamesAreMasked(unittest.TestCase):
+    """The TLD list held every public suffix and not one of the ones a LAN
+    actually uses, so the machine's own name survived cleaning whole.
+
+    `hostname` on every Mac answers `<account>-MacBook-Pro.local`, and that
+    string rides along in ssh banners, mDNS failures and a dev server's
+    "Network:" line -- which is to say, the account name reaching the clouds
+    with no redactor installed at all.
+    """
+
+    HOSTS = ("janedoe-macbook-pro.local", "buildbox.internal", "nas.lan",
+             "gitlab.corp", "printer.home", "db.localdomain", "wiki.intranet",
+             "vault.private", "1.0.0.127.in-addr.arpa", "dev.localhost")
+
+    def test_the_exact_case_from_the_audit(self):
+        got = toks("ssh into janedoe-macbook-pro.local for the logs")
+        self.assertNotIn("janedoe-macbook-pro.local", got)
+        self.assertNotIn("janedoe", " ".join(got))
+        self.assertIn("logs", got)
+
+    def test_every_special_use_suffix(self):
+        for host in self.HOSTS:
+            with self.subTest(host=host):
+                self.assertFalse(keep(host))
+                self.assertNotIn(host, toks("point it at " + host + " today"))
+
+    def test_the_bare_words_are_still_vocabulary(self):
+        """The rule matches a DOTTED SUFFIX. `local`, `home`, `private`,
+        `internal` and `corp` are ordinary words and must survive."""
+        got = toks("keep the local copy at home on a private internal corp lan "
+                   "host so the arpa intranet stays offline")
+        for word in ("local", "home", "private", "internal", "corp", "lan",
+                     "host", "arpa", "intranet"):
+            self.assertIn(word, got, word)
+
+    def test_no_common_file_extension_was_added(self):
+        """`Button.test`, `fixture.example` and `x.invalid` are filename stems,
+        so RFC 6761's other reserved names are deliberately left out."""
+        for ext in ("test", "example", "invalid", "spec", "min", "map",
+                    "lock", "bak", "orig"):
+            self.assertNotIn(ext, HOSTNAME_TLDS, ext)
+        self.assertTrue(keep("button.test"))
+
+    def test_error_signatures_inherit_the_same_list(self):
+        """facets.RE_MASK_HOST is built from HOSTNAME_TLDS, so a signature
+        that names the machine has to mask it too."""
+        sig = error_signature("Error: connect ECONNREFUSED "
+                              "janedoe-macbook-pro.local:8080")
+        self.assertNotIn("janedoe", sig)
+        self.assertIn("HOST", sig)
+
+
+# --- 3c. Secrets are not vocabulary -----------------------------------------
+
+class TestHighEntropyTokensAreRejected(unittest.TestCase):
+    """clean_prose removes blobs by shape, and its rules left a gap exactly
+    the width of a modern API key: RE_B64 wants 40+ characters and rejects
+    base64url's `-`/`_`, RE_HEX wants 12+ hex and nothing else, and keep()
+    only caps a token at 28.
+
+    `sk-proj-Ab3xQ9pLm2` came out of the tokenizer as
+    `['key', 'sk-proj-ab3xq9plm2']`, and 202 opaque ids from Antigravity's
+    protobuf recovery (`eyp7apy0npczxn8p1l-xqqe`) sat in the shipped
+    vocab.json.
+    """
+
+    OPAQUE = ("sk-proj-ab3xq9plm2", "eyp7apy0npczxn8p1l-xqqe",
+              "q1f6arrfi6uc7m8p75et8aw", "rlf6atgmfncrkdup8kqjiag",
+              "e97asfbhpqp28opm5v3ka0", "a0o4atrgbjpz7m8pqszyyak",
+              "acakatkubohe7m8pjoo3-aq", "alt6avuhmnz4xn8pqs3wiqe")
+
+    CREDENTIALS = ("sk-proj-ab3xq9plm2", "ghp_abcdefghij1234567890",
+                   "github_pat_11abcdefgh", "glpat-abcdefgh12345",
+                   "xoxb-abcdefghij", "akiaiosfodnn7example",
+                   "aizasybcdefghijklmnop", "dop_v1_abcdefgh12",
+                   "shpat_abcdefgh1234", "pypi-agendhjklzxcv")
+
+    def test_the_exact_case_from_the_audit(self):
+        self.assertEqual(toks("key sk-proj-Ab3xQ9pLm2"), ["key"])
+        self.assertEqual(toks("blob eyp7apy0npczxn8p1l-xqqe"), ["blob"])
+
+    def test_opaque_ids_are_rejected(self):
+        for tok in self.OPAQUE:
+            with self.subTest(tok=tok):
+                self.assertFalse(keep(tok))
+
+    def test_named_credential_shapes_are_rejected(self):
+        """A vendor prefix is a stronger signal than any entropy measure, and
+        it catches the ones entropy cannot: `AKIA` + 16 characters carries a
+        single digit run."""
+        for tok in self.CREDENTIALS:
+            with self.subTest(tok=tok):
+                self.assertFalse(keep(tok))
+
+    def test_a_numeronym_is_not_a_secret(self):
+        """`i18n`, `a11y`, `l10n` and a version suffix all have exactly ONE
+        digit run; a random id has them scattered. `i18nmanager` alone is 53
+        occurrences of real vocabulary in the owner's corpus."""
+        for tok in ("i18nmanager", "i18nmanager.isrtl", "initreacti18next",
+                    "confirma11ylabel", "compute20daylow", "css1compat",
+                    "migratefromv4tomultisession", "get20daylow"):
+            with self.subTest(tok=tok):
+                self.assertTrue(keep(tok), tok)
+
+    def test_ordinary_filenames_survive(self):
+        for tok in ("missing_strings_0.json", "components_group_2_he.json",
+                    "game_mockup_v2.html", "wilhelm_scream.mp3",
+                    "compiled.pt-br.chunk1.json", "tournament_v2_schema.sql",
+                    "sell-toast-cfge-plus448.png"):
+            with self.subTest(tok=tok):
+                self.assertTrue(keep(tok), tok)
+
+    def test_words_that_merely_start_like_a_credential_survive(self):
+        for tok in ("sk-learn", "skeleton", "pk-anything", "skip-list",
+                    "npm_package_version", "hf_hub", "ghost-writer"):
+            with self.subTest(tok=tok):
+                self.assertTrue(keep(tok), tok)
+
+
 # --- 4. Error signatures carry no author-specific text ----------------------
 
 class TestErrorSignatureCarriesNoIdentity(unittest.TestCase):
@@ -316,6 +438,170 @@ class TestErrorSignatureCarriesNoIdentity(unittest.TestCase):
     def test_empty_and_prose_input(self):
         self.assertEqual(error_signature(""), "")
         self.assertEqual(error_signature("   \n  "), "")
+
+
+# --- 4b. The errors facet holds error signatures, not sentences -------------
+
+class TestOnlyMachineOutputBecomesASignature(unittest.TestCase):
+    """The line was chosen by a substring scan for error|exception|failed|
+    fatal|traceback|cannot|not found|permission denied|refused, anywhere in
+    the line, over the whole body of any flagged event. Those are ordinary
+    English words, so the shipped dashboard.html published under "What went
+    wrong most": a product-curriculum sentence, an agent-doctrine table row, a
+    skill's frontmatter `description:`, a JSON issue title, four lines of the
+    owner's own source, a .gitignore entry and a git push confirmation.
+
+    A keyword now only counts where a machine puts one.
+    """
+
+    PROSE = (
+        # the product curriculum, matched on "cannot"
+        "2. **The stop-loss** - define risk, accept being wrong. "
+        "*(If you cannot lose small, you cannot stay in the game.)*",
+        # an agent-doctrine table row, matched on "exception"
+        "| **Exclusive-resource round** | testers sharing ONE exclusive "
+        "device run **sequentially** under its lock (the sanctioned "
+        "exception to doctrine) |",
+        # a source comment
+        "* These tests catch common configuration errors before they "
+        "reach production.",
+        # a skill's frontmatter
+        "description: Debug and fix runtime errors by screenshotting the "
+        "simulator, reading logs, and iterating",
+        # an agent instruction
+        "Spawn a cheap Haiku agent to collect current errors:",
+        "Standardizes command building and device targeting to prevent errors.",
+        # a founder directive carried in a roadmap row
+        "compiles it to a lesson. This is a **bounded exception to the "
+        "single-source rule**",
+        # source code
+        "if (errors.length) {",
+        "const accentColor = (a === 'buy') ? colors.primary : colors.error;",
+        'const COL_ERROR: Color = Color("d68670")',
+        "console.error('No available session slots');",
+        # a .gitignore line and git plumbing output
+        "yarn-error.log*",
+        "* [new branch]      claude/fix-render-error-UgUfz -> origin/x",
+        "[feat/more-lessons 88547d5] Finalize lesson tasks and fix lint error",
+        "1324a65 Finalize lesson tasks and fix lint error",
+        # JSON keys and report summaries
+        '"errors": []',
+        "- gaps: 88 (errors: 88, warnings: 0)",
+        '"result": "0 magnitude errors, 216 baselined entries"',
+    )
+
+    MACHINE = (
+        "Traceback (most recent call last):",
+        "TypeError: Cannot read properties of undefined (reading 'dump')",
+        "SyntaxError: unterminated string literal (detected at line 7)",
+        "fatal: not a git repository (or any of the parent directories): .git",
+        "error: cannot pull with rebase: You have unstaged changes.",
+        "npm error code ENOTFOUND",
+        "rg: metro.config.ts: No such file or directory (os error 2)",
+        "(eval):1: command not found: shopt",
+        "<tool_use_error>File has not been read yet.</tool_use_error>",
+        "42:  [ERROR] Magnitude baseline: count=151 does not match 152 entries",
+        "9:34  error  'useMemo' is defined but never used.",
+        "src/x.test.ts(57,21): error TS2554: Expected 5 arguments, but got 4.",
+        "SCRIPT ERROR: Parse Error: Assignment is not allowed here.",
+        "awk: syntax error at source line 1",
+        "curl: (22) The requested URL returned error: 404",
+        "PreToolUse:Bash hook error: [$DIR/guard.py]: BLOCKED (fleet hook)",
+        "Failed to fetch document content at https://example.com/x",
+        "load-app: FAILED to reach game content in 90s",
+        "lsof: status error on 8772: No such file or directory",
+        "Error: Operation not permitted @ dir_s_mkdir - /tmp/x",
+        "ParserError while parsing a block mapping",
+    )
+
+    # Every prose line above, buried in the kind of body it really arrived in:
+    # a document the agent read, flagged as an error event because the tool
+    # call failed. Nothing in it is a diagnostic, so nothing in it is a
+    # signature -- which is the contract the old substring scan broke.
+    DOC_HEAD = ("# Notes\n\nSome ordinary paragraph that mentions nothing "
+                "unusual at all.\n\n")
+
+    def test_a_prose_line_is_never_selected(self):
+        for line in self.PROSE:
+            with self.subTest(line=line[:48]):
+                self.assertFalse(looks_machine(line), line[:60])
+
+    def test_a_prose_line_never_becomes_a_signature(self):
+        for line in self.PROSE:
+            with self.subTest(line=line[:48]):
+                self.assertEqual(error_signature(self.DOC_HEAD + line), "",
+                                 line[:60])
+
+    def test_a_real_diagnostic_line_is_selected(self):
+        for line in self.MACHINE:
+            with self.subTest(line=line[:48]):
+                self.assertTrue(looks_machine(line), line[:60])
+
+    def test_a_real_diagnostic_still_becomes_a_signature(self):
+        for line in self.MACHINE:
+            with self.subTest(line=line[:48]):
+                self.assertNotEqual(error_signature(self.DOC_HEAD + line), "",
+                                    line[:60])
+
+    def test_the_exact_document_from_the_audit_yields_nothing(self):
+        """The curriculum sentence did not arrive alone -- it was one line of
+        a document the agent had read, flagged as an error event."""
+        doc = ("# Day trading, week 2\n\n"
+               "The four rules of the desk:\n\n"
+               "1. **Position sizing** - never more than 1R.\n"
+               "2. **The stop-loss** - define risk, accept being wrong. "
+               "*(If you cannot lose small, you cannot stay in the game.)*\n"
+               "3. **The journal** - write the thesis before the entry.\n")
+        self.assertEqual(error_signature(doc), "")
+
+    def test_a_diagnostic_buried_under_a_status_line_still_wins(self):
+        """`Exit code 1` heads the body and the real failure is ten lines
+        down, so the two are not in reading order: a single first-match pass
+        collapsed 17 distinct signatures onto "Exit code N"."""
+        body = ("Exit code 1\n"
+                "\n"
+                "> typecheck\n"
+                "> tsc --noEmit\n"
+                "\n"
+                "src/game/audio.ts(275,33): error TS7053: Element implicitly "
+                "has an 'any' type.\n")
+        self.assertIn("TS", error_signature(body))
+        self.assertNotIn("Exit code", error_signature(body))
+
+    def test_a_status_line_is_still_a_signature_on_its_own(self):
+        self.assertEqual(error_signature("Exit code 1"), "Exit code N")
+
+    def test_the_harness_refusals_survive(self):
+        """Plain-English refusals with no marker in them at all are the
+        largest single group in the real corpus, and they are real failures.
+        They are short, which is what separates them from a document."""
+        for line in ("This session is isolated in the worktree /a/b/c, but "
+                     "this command is too complex to verify.",
+                     "The user doesn't want to proceed with this tool use.",
+                     "Permission for this action was denied by the auto mode "
+                     "classifier."):
+            with self.subTest(line=line[:40]):
+                self.assertNotEqual(error_signature(line), "")
+
+    def test_a_long_document_with_no_marker_yields_nothing(self):
+        doc = "\n".join(f"line {i} of an ordinary design note" for i in range(60))
+        self.assertEqual(error_signature(doc), "")
+
+    def test_a_non_zero_exit_code_attests_a_long_body(self):
+        """The caller may know something the text does not say."""
+        doc = "\n".join(f"line {i} of an ordinary design note" for i in range(60))
+        self.assertEqual(error_signature(doc, exit_code=0), "")
+        self.assertNotEqual(error_signature(doc, exit_code=1), "")
+
+    def test_source_lines_are_never_the_signature(self):
+        """A grep hit and a stack-trace preamble arrive inside a tool result.
+        `throw err;` used to outrank the `Error: Cannot find module` two lines
+        below it."""
+        body = ("node:internal/modules/cjs/loader:1215\n"
+                "  throw err;\n"
+                "  ^\n"
+                "Error: Cannot find module 'sharp'\n")
+        self.assertIn("Cannot find module", error_signature(body))
 
 
 # --- 5. A file type is a file's extension, not a domain's last label --------

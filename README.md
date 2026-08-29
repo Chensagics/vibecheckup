@@ -54,9 +54,10 @@ runtime — and priced from a bundled table: total, rolling 7 / 30 days, cache-h
 rate, cost per day, spend by model and by tool. Grok CLI and Antigravity log no
 usage at all and are badged **no usage data** instead of being counted as zero.
 
-<!-- assets/dashboard.png — the Lexicon and Spend tabs, generated from
-     `./vibecheckup.sh --demo` so it contains no real vocabulary. -->
-<img src="assets/dashboard.png" alt="vibecheckup — word clouds and spend" width="860">
+<!-- assets/dashboard.png — the Overview tab: the coverage rail and the
+     headline cloud. Generated from `./vibecheckup.sh --demo` so it contains no
+     real vocabulary. -->
+<img src="assets/dashboard.png" alt="vibecheckup — the Overview tab: coverage by tool and the headline word cloud" width="860">
 
 ## Run it
 
@@ -103,9 +104,10 @@ stats it generates and tell me what a year of my prompts says about me.
 
 Note: that last step shows your `stats.json` — your vocabulary, your project
 names, and the raw error text your tools hit, quoted from the logs — to whatever
-model you are driving. The local run itself uploads nothing; handing the results
-to an agent is your call, and the dashboard alone answers the same questions
-without it.
+model you are driving, and an agent that reads the rest of `data/` sees
+`vocab.json` and `redact.json` as well. The local run itself uploads nothing;
+handing the results to an agent is your call, and the dashboard alone answers
+the same questions without it.
 
 Re-run any time to refresh; there is no cache to go stale. A full run re-reads
 everything — a few thousand files in well under a minute.
@@ -114,7 +116,7 @@ everything — a few thousand files in well under a minute.
 |---|---|
 | `--demo` | Build from a deterministic synthetic corpus (`samples/generate.py`). Never touches your real logs. |
 | `--force`, `-f` | With `--demo`, overwrite an existing `data/events.ndjson` without asking. |
-| `--scrub` | Also write `dashboard-shareable.html` — the same page without project names, error text or shell commands — and open that one. `dashboard.html` is still written, unchanged. See [Privacy](#privacy). |
+| `--scrub` | Also write `dashboard-shareable.html` — the same page without project names, error text, shell commands or MCP server names — and open that one. `dashboard.html` is still written, unchanged. See [Privacy](#privacy). |
 | `--tool NAME` | Limit ingest to one source; repeatable. `claude_code`, `codex`, `grok`, `gemini_cli`, `antigravity`. |
 | `--limit N` | Cap files per source — a quick smoke run. |
 | `--no-open` | Build the dashboard but don't open a browser. |
@@ -141,46 +143,82 @@ your tools write inside that environment.
 
 ## Privacy
 
-**Everything runs locally and none of your session data ever leaves your
-machine.** The pipeline makes no network calls at all: `ingest.py`,
+**Everything runs locally: nothing this tool does sends your session data
+anywhere.** The pipeline makes no network calls at all: `ingest.py`,
 `analyze.py` and `build_dashboard.py` only read files and write files, and the
 dashboard opens over `file://`. The one network call in the project is the
 `curl` bootstrap above, which downloads this repo when there is no checkout.
+What leaves your machine is what you choose to send — a share card, a share
+copy, a `stats.json` handed to an agent — and the rest of this section is about
+making those choices with the facts in front of you.
 
 - **The repo ships no user data.** `data/`, `snapshots/` and `dashboard.html`
   are gitignored, because they contain your real vocabulary, project names and
-  local paths. `dashboard-shareable.html` is gitignored too — it is safe to
-  hand to a person, which is not the same as belonging in a commit.
+  local paths. Two files inside `data/` earn that on their own account.
+  `vocab.json` is the vocabulary tail behind `stats.json` with the top-N cut
+  taken off, which makes it the longer and more exposing of the two, not the
+  safer one. `redact.json` is the denylist, and a denylist spells out the
+  branch names — live A/B arms, unreleased features — you wanted hidden. Treat
+  both exactly as you treat `dashboard.html`. `dashboard-shareable.html` is
+  gitignored too — it is safe to hand to a person, which is not the same as
+  belonging in a commit.
 - **`dashboard.html` inlines everything in `stats.json`, verbatim.** That is
   what makes it a single file you can keep — and it means the file carries your
-  project and worktree directory names, one word cloud per repo, the raw error
-  signatures (which quote your own commit messages, account names and API
-  errors back at you), and every shell command your agents ran. Treat the file
-  as private, and treat **screenshots of the Projects and Activity tabs** the
-  same way: both are lists of your repo names.
+  project and worktree directory names, one word cloud per repo, every shell
+  command your agents ran, and the *What went wrong* facet. That facet is one
+  line quoted out of each failing tool result — chosen by the diagnostic
+  markers a machine puts in one, then masked for URLs, addresses, paths,
+  hostnames, hashes, commit subjects and your own account name. It is still
+  text lifted off your machine rather than words you typed, and the selection
+  is a heuristic: where a short tool result carries no marker at all its first
+  line is taken anyway, so a line that was never a failure can land there.
+  Treat the file as private, and treat **screenshots of the Projects and
+  Activity tabs** the same way: both are lists of your repo names.
 - **`--scrub` is how you make a copy you can hand over.**
   `python3 build_dashboard.py --scrub` (or `./vibecheckup.sh --scrub`) writes a
   separate `dashboard-shareable.html` and leaves `dashboard.html` alone. It
   removes the whole `clouds.by_project` facet, every `errors` list, every
   `commands` list and the session ids; it replaces the repo names in the
   Activity table with `project 01`, `project 02`, … so the shape of your year
-  survives without the names; and from the clouds that remain it drops any term
-  that matches your account name, one of your project names, or the shape of a
-  filename, hostname or path. What is left is the global and per-tool prose
-  clouds, phrases, trends, spend, the activity histograms and Wrapped. The
-  page says `SHARE COPY` in its footer and on its Spend tab, so a recipient can
-  tell which one they were given.
+  survives without the names; it cuts the server name out of every MCP tool, so
+  `mcp__meta-ads__ads_get_ad_entities` becomes `mcp:ads_get_ad_entities` and
+  the Tools view stops being an inventory of the vendors you are wired to; and
+  from the clouds that remain it drops any term matching your account name or
+  one of your project names, or carrying a dot between two word characters — a
+  filename, hostname, bundle id or path. What is left is the global and
+  per-tool prose clouds, phrases, trends, spend, the activity histograms and
+  Wrapped. The page says `SHARE COPY` in its footer and on its Spend tab, so a
+  recipient can tell which one they were given.
 - **What `--scrub` does not do is read your mind.** The clouds it keeps are
   still your own prose, so an unreleased codename you typed all year is still an
   unreleased codename you typed all year — the scrub removes strings harvested
-  from your machine, not vocabulary. Read the page before you send it.
-- **Your own name is masked everywhere, in every build.** vibecheckup works out
-  the strings that identify you — your account name, your git name and email,
-  and the account half of your git remotes — and removes them from the word
-  clouds, along with the worktree branch names it sees while grouping sessions
-  by repo, because an unreleased feature name is not vocabulary. It will not
-  auto-mask a login that is also an ordinary word (`mark`, `will`, `sam`,
-  `docs`, `main`); it prints what it skipped, and why, on every run.
+  from your machine, not vocabulary. Its identifier rule is a rule about the
+  dot and nothing else: `buildbox.internal` goes, `buildbox` stays, and so do
+  `acmecorp-prod-eu` and `macbookpro18`, because on the page nothing separates
+  them from a word you typed. Widening the rule would cost real vocabulary;
+  `--redact` is the answer for a name you know about. The tool half of an MCP
+  call is kept too, and a distinctive one still implies its server. Read the
+  page before you send it.
+- **A snapshot outlives the rules that built it.** `snapshot.py` copies the
+  built page into `snapshots/`, and what was redacted out of that copy is a
+  property of the build, not of your checkout. Every page is stamped with the
+  redaction-schema version it was made under, and `snapshot.py --list` marks
+  anything below the current one `PRE-REDACTION, rebuild before sharing`.
+  Rebuilding is the fix — the old file keeps whatever the old rules let
+  through, and nothing on its face says so.
+- **The strings that identify you are masked in every build — except the ones
+  each run tells you it skipped.** vibecheckup works out who you are from your
+  account name, your git name and email, and the account half of your git
+  remotes, and removes those strings from the word clouds, along with the
+  worktree branch names it sees while grouping sessions by repo, because an
+  unreleased feature name is not vocabulary. There is a guard on that, because
+  redacting the wrong string deletes a word out of every cloud: it will not
+  auto-mask anything that is also an ordinary word (`mark`, `will`, `sam`,
+  `docs`, `main`), and for the sources it is only guessing from — a home
+  directory's name, a git remote's owner — it will not auto-mask anything under
+  five characters either. Every run therefore prints a **`NOT masked`** line
+  naming what it refused and why. That line, not this paragraph, is the
+  accurate list; `--redact` anything on it you want gone.
 
   To add what it cannot work out for itself — a codename, a client, a handle, or
   one of those skipped words — pass `--redact`:
@@ -192,10 +230,11 @@ dashboard opens over `file://`. The one network call in the project is the
   It is repeatable and also works on `ingest.py` and `analyze.py`. For strings
   you always want masked, put one per line in
   `~/.config/vibecheckup/redact` (`#` starts a comment), or point
-  `$VIBECHECKUP_REDACT_FILE` elsewhere. Explicit strings skip the common-word
-  check — if you say it is yours, it goes. `--branch-redaction decorated` masks
-  only the `worktree-<branch>` spellings and leaves the bare branch name; `off`
-  disables branch masking entirely.
+  `$VIBECHECKUP_REDACT_FILE` elsewhere. Explicit strings skip the guard
+  entirely, length check and common-word check both — if you say it is yours,
+  it goes. `--branch-redaction decorated` masks only the `worktree-<branch>`
+  spellings and leaves the bare branch name; `off` disables branch masking
+  entirely.
 - **The Wrapped card carries no directory names and no file paths** — that rule
   is enforced in `wcstats/wrapped.py`, not in the page, so it holds for anything
   built from `stats.json`. **The words on it are a different matter: they are
@@ -318,17 +357,23 @@ adapters/   base.py protoscan.py claude_code.py codex.py grok.py
 wcstats/    clean.py tokenize.py score.py facets.py spend.py wrapped.py
             prices.json
 samples/    generate.py         deterministic synthetic corpus for --demo
-tests/      test_all.py test_bootstrap.py test_i18n_time.py test_scrub.py
-            fixtures/
+tests/      test_all.py test_bootstrap.py test_i18n_time.py test_projects.py
+            test_redaction.py test_scrub.py test_selfredact.py
+            test_snapshot.py test_vocab_gate.py  fixtures/
 snapshot.py                     keep a dated copy of a built dashboard
-                                (--scrub keeps the shareable one instead)
-data/       events.ndjson stats.json vocab.json     (generated, gitignored)
+                                (--scrub keeps the shareable one instead;
+                                 --list flags copies built by older rules)
+data/       events.ndjson stats.json vocab.json redact.json
+                                                    (generated, gitignored)
 dashboard.html                                      (generated, gitignored)
 dashboard-shareable.html        only with --scrub   (generated, gitignored)
 ```
 
-`data/vocab.json` holds full ungated counts; `stats.json` keeps top-N per facet
-so the dashboard loads instantly.
+`stats.json` keeps top-N per facet so the dashboard loads instantly.
+`vocab.json` is the tail below that cut — gated, but longer and more exposing
+than `stats.json` rather than less. `redact.json` is the denylist `ingest.py`
+worked out, which is a list of exactly the strings you wanted hidden. Both are
+private files; see [Privacy](#privacy).
 
 ## Development
 
@@ -337,7 +382,7 @@ python3 -m unittest discover -s tests   # fixtures only, no network
 ./vibecheckup.sh --demo --no-open         # full pipeline on synthetic data
 ```
 
-**321 tests on a fresh clone, 341 once you have built a dashboard.** The
+**384 tests on a fresh clone, 404 once you have built a dashboard.** The
 difference is the checks that read `data/stats.json` and `dashboard.html`; with
 nothing built yet they skip rather than fail, so a clone with no logs still runs
 green.
@@ -348,9 +393,9 @@ pricing (including the Codex cumulative-total trap and the unknown-model null),
 the `stats.json` contract, the inlining that keeps a stray `<script` in your
 logs from blanking the page, and the bootstrap script's argument handling.
 `tests/test_scrub.py` seeds a synthetic corpus with a fake account name, fake
-repo names and fake error text, then greps the built share copy for every one of
-them — the leak has to be visible in the unscrubbed build for the same test to
-pass, so a zero cannot come from an empty fixture.
+repo names, fake error text and fake MCP server names, then greps the built
+share copy for every one of them — the leak has to be visible in the unscrubbed
+build for the same test to pass, so a zero cannot come from an empty fixture.
 
 ## Roadmap
 

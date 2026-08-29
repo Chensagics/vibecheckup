@@ -44,8 +44,10 @@ from wcstats.clean import (COMMON_WORDS, LABEL_PLACEHOLDER,  # noqa: E402
                            clean_prose, derive_identities, format_redaction,
                            git_config_pairs, identities_from_email,
                            identity_verdict, install_redactor,
-                           owner_from_remote_url, owners_from_git_config,
-                           read_redact_file, redact_file_path)
+                           literal_is_applicable, owner_from_remote_url,
+                           owners_from_git_config, read_redact_file,
+                           redact_file_path, unmatchable_literals,
+                           UNMATCHABLE_REASON)
 from wcstats.tokenize import keep, tokens  # noqa: E402
 
 
@@ -330,6 +332,237 @@ class TestMaskingPositions(RedactorCase):
         r = Redactor(["combat-engine"])
         self.assertEqual(r.scrub("HERD_LANE=combat-engine failed", "REDACTED"),
                          "HERD_LANE=REDACTED failed")
+
+
+# --- 3b. a two-word display name --------------------------------------------
+
+class TestTwoWordDisplayName(RedactorCase):
+    """The tool said the name was masked, printed it as masked, and published
+    it on the share card.
+
+    Three things conspired. `derive_identities` emitted the whole display name
+    as a literal; `_pattern` split it on `[._-]` only, so "jane doe" compiled
+    to `jane\\ doe`; and `scrub` substitutes one RE_TOKENISH run at a time, and
+    a run can never contain a space. So the literal could not match ANYTHING:
+
+        Redactor(['jane doe']).hits('jane')                -> False
+        Redactor(['jane doe']).scrub('signed by Jane Doe') -> unchanged
+
+    The two halves were then refused separately by MIN_IDENTITY_LEN, and the
+    terminal printed
+
+        identities     jane doe, janedoe
+        NOT masked     jane (shorter than 5 characters), doe (shorter ...)
+
+    while stats.json carried wrapped.top_words = [['jane', 2], ['doe', 2]] --
+    the forename and surname as the #1 and #2 words on the Agent Wrapped share
+    card, the one artifact designed for public posting.
+    """
+
+    GITCONFIG = "[user]\n\tname = Jane Doe\n\temail = jane.doe@example.com\n"
+
+    def derive(self, name="Jane Doe", email="jane.doe@example.com",
+               home_name="janedoe"):
+        cfg = "[user]\n\tname = %s\n\temail = %s\n" % (name, email)
+        return derive_identities(home=fake_home(self, home_name, gitconfig=cfg))
+
+    def test_the_multiword_literal_actually_matches(self):
+        r = Redactor(["jane doe"])
+        self.assertTrue(r.hits("jane doe"))
+        self.assertEqual(r.scrub("signed by Jane Doe"), "signed by  ")
+
+    def test_a_multiword_literal_matches_every_separator(self):
+        """A display name written with a space and the same identity written
+        as an address local part are one person."""
+        r = Redactor(["jane doe"])
+        for text in ("jane doe", "jane.doe", "jane-doe", "jane_doe",
+                     "Jane  Doe"):
+            with self.subTest(text=text):
+                self.assertNotIn("jane", r.scrub("by " + text + " here").lower())
+
+    def test_the_whole_token_still_goes(self):
+        """Same promise as the single-token pass: the match is grown out to
+        the token edges before it is replaced."""
+        self.assertEqual(Redactor(["jane doe"]).scrub("see foo-jane doe.md now"),
+                         "see   now")
+
+    def test_a_branch_name_does_not_gain_the_whitespace_spelling(self):
+        """The widening is one-directional. `combat-engine` must not start
+        eating the two ordinary words "combat engine" out of prose."""
+        r = Redactor(["combat-engine"])
+        got = r.scrub("the combat engine is fine but worktree-combat-engine is not")
+        self.assertIn("combat engine", got)
+        self.assertNotIn("worktree-combat-engine", got)
+
+    def test_both_halves_of_the_name_are_masked(self):
+        """`user.name` is the person, typed by the person, so the length gate
+        does not apply to it -- only the common-word guard does."""
+        got, skipped = self.derive()
+        for lit in ("jane", "doe", "jane doe", "jane.doe", "janedoe"):
+            self.assertIn(lit, got, lit)
+        self.assertEqual(skipped, [])
+
+    def test_the_name_really_is_gone_from_prose(self):
+        got, _ = self.derive()
+        self.install(*got)
+        text = clean_prose("Hey Jane, tell Jane Doe that jane.doe owns it. "
+                           "Jane's review is Doe's problem too.")
+        for leak in ("jane", "doe"):
+            self.assertNotIn(leak, text.lower(), text)
+        self.assertIn("review", tokens(text))
+
+    def test_the_report_matches_what_is_masked(self):
+        """The whole point: every literal the terminal calls masked has to be
+        one the matcher can actually apply."""
+        r, report = build_redaction(
+            home=fake_home(self, "janedoe", gitconfig=self.GITCONFIG),
+            read_file=False)
+        text = format_redaction(report)
+        self.assertIn("identities", text)
+        for lit in report["identities"]:
+            with self.subTest(lit=lit):
+                self.assertTrue(literal_is_applicable(lit), lit)
+                self.assertTrue(r.hits(lit) or r.scrub("x " + lit + " x")
+                                != "x " + lit + " x", lit)
+        self.assertNotIn("shorter than", text)
+
+    def test_the_real_corroboration_from_this_machine(self):
+        """`user.name = Chen Sagi` is one token per word and both were refused,
+        so vocab.json shipped chen x21, chen's x2, sagi x3 and sagi's x4 out of
+        "Hey Chen", "tell Chen the handoff line" and "Chen Sagi's projects"."""
+        got, _ = self.derive(name="Chen Sagi", email="chen.sagi.cs@gmail.com",
+                             home_name="chensagi")
+        self.install(*got)
+        text = clean_prose("Hey Chen, tell Chen the handoff line about "
+                           "Chen Sagi's projects and sagi's review")
+        for leak in ("chen", "sagi"):
+            self.assertNotIn(leak, text.lower(), text)
+        self.assertIn("handoff", tokens(text))
+
+    def test_a_short_name_that_is_a_word_is_still_refused(self):
+        """The common-word guard is what carries the risk now, so it has to
+        hold on its own: a person called Art keeps the word `art`."""
+        got, skipped = self.derive(name="Art Vandelay", email="art@vandelay.com",
+                                   home_name="artv")
+        self.assertNotIn("art", got)
+        self.assertIn("art", [lit for lit, _why in skipped])
+        self.assertIn("art vandelay", got)      # the full name still goes
+        self.install(*got)
+        kept = tokens(clean_prose(
+            "the art of good design is art direction and art history"))
+        self.assertEqual(kept.count("art"), 3)
+        self.assertNotIn("vandelay", clean_prose("signed Art Vandelay").lower())
+
+    def test_a_one_letter_middle_initial_is_refused(self):
+        got, skipped = self.derive(name="Jane Q Doe")
+        self.assertNotIn("q", got)
+        self.assertIn("q", [lit for lit, _why in skipped])
+
+    def test_a_short_literal_is_anchored_at_both_edges(self):
+        """The run-on rule is right for a distinctive handle and catastrophic
+        for a four-letter forename: unanchored, `li` eats list/line/link/
+        library, `cs` eats csv and `ana` eats analysis."""
+        for lit, victim in (("li", "the list of lines and links in the library"),
+                            ("cs", "read the csv file"),
+                            ("ana", "run the analysis and analytics"),
+                            ("chen", "chencorp shipped it")):
+            with self.subTest(lit=lit):
+                self.assertEqual(Redactor([lit]).scrub(victim), victim)
+
+    def test_a_short_literal_still_masks_every_form_a_name_takes(self):
+        r = Redactor(["chen"])
+        for text in ("Hey Chen", "chen's review", "chen-sagi owns it",
+                     "ping chen.", "(chen)", "CHEN did"):
+            with self.subTest(text=text):
+                self.assertNotIn("chen", r.scrub(text).lower())
+
+    def test_a_long_literal_keeps_the_run_on_rule(self):
+        self.assertEqual(Redactor(["chensagi"]).scrub("chensagics added it"),
+                         "  added it")
+
+    def test_remote_owners_keep_the_length_gate(self):
+        """A remote owner can be an ORGANISATION -- `npm`, `expo`, `mae` --
+        rather than a human, so the weaker source keeps the second guard."""
+        cfg = ('[remote "origin"]\n'
+               '\turl = https://github.com/abcd/thing.git\n')
+        got, skipped = derive_identities(home=fake_home(self, "nobody"),
+                                         repo_configs=[cfg])
+        self.assertNotIn("abcd", got)
+        self.assertIn("abcd", [lit for lit, _why in skipped])
+
+
+# --- 3c. the report may not lie ----------------------------------------------
+
+class TestTheReportCannotClaimWhatItCannotMask(unittest.TestCase):
+    """A report that lies is worse than no report.
+
+    `format_redaction` listed `jane doe` under `identities` while the matcher
+    could not apply it anywhere. The self-check runs both code paths -- hits(),
+    which tokenize.keep() calls, and scrub(), which clean_prose() calls --
+    because that literal passed the first and silently failed the second.
+    """
+
+    UNMATCHABLE = "///"
+
+    def report(self, **kw):
+        base = {"identities": [], "branches": [], "decorated": [],
+                "explicit": [], "skipped": [], "branch_mode": "full"}
+        base.update(kw)
+        return base
+
+    def test_an_unmatchable_literal_is_detected(self):
+        self.assertFalse(literal_is_applicable(self.UNMATCHABLE))
+        self.assertFalse(literal_is_applicable(""))
+        self.assertFalse(literal_is_applicable("   "))
+
+    def test_an_ordinary_literal_passes(self):
+        for lit in ("chensagi", "combat-engine", "jane doe", "chen",
+                    "worktree-combat-engine", "chen.sagi.cs"):
+            with self.subTest(lit=lit):
+                self.assertTrue(literal_is_applicable(lit), lit)
+
+    def test_the_formatter_refuses_to_claim_it(self):
+        rep = self.report(identities=["chensagi", self.UNMATCHABLE])
+        text = format_redaction(rep)
+        self.assertIn("chensagi", text)
+        identity_line = [ln for ln in text.splitlines() if "identities" in ln][0]
+        self.assertNotIn(self.UNMATCHABLE, identity_line)
+        self.assertIn("NOT masked", text)
+        self.assertIn(self.UNMATCHABLE, text)
+
+    def test_every_bucket_is_checked_not_just_identities(self):
+        for bucket in ("identities", "branches", "decorated", "explicit"):
+            with self.subTest(bucket=bucket):
+                rep = self.report(**{bucket: [self.UNMATCHABLE]})
+                self.assertEqual(unmatchable_literals(rep),
+                                 [(self.UNMATCHABLE, bucket)])
+
+    def test_the_formatter_does_not_mutate_the_caller_s_report(self):
+        rep = self.report(identities=["chensagi", self.UNMATCHABLE])
+        format_redaction(rep)
+        self.assertIn(self.UNMATCHABLE, rep["identities"])
+
+    def test_build_redaction_never_produces_one(self):
+        r, report = build_redaction(
+            home=fake_home(self, "janedoe",
+                           gitconfig="[user]\n\tname = Jane Doe\n"),
+            branch_pairs=[("combat-engine", "finn"), ("main", "finn")],
+            extra=["acme-corp", self.UNMATCHABLE], read_file=False)
+        self.assertEqual(unmatchable_literals(report), [])
+        self.assertIn((self.UNMATCHABLE, UNMATCHABLE_REASON), report["skipped"])
+        self.assertTrue(r.hits("jane doe"))
+
+    def test_the_short_form_limitation_is_stated(self):
+        """A short literal masks whole words only, so a repo or org built on
+        the owner's name survives. The user is told, because the F1 lesson is
+        that a silent gap is worse than a stated one."""
+        rep = self.report(identities=["chen", "chensagi"])
+        text = format_redaction(rep)
+        self.assertIn("whole word only", text)
+        self.assertIn("chen", text)
+        self.assertIn("--redact", text)
+        self.assertNotIn("whole word only", format_redaction(
+            self.report(identities=["chensagi"])))
 
 
 # --- 4. branch names ---------------------------------------------------------
