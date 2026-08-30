@@ -61,8 +61,25 @@ usage at all and are badged **no usage data** instead of being counted as zero.
 
 ## Run it
 
-Two equal ways in. Both run the same three stages locally and neither installs
-anything.
+You already have an agent open. Give it this and it will do the rest — read the
+docs, tell you what the tool touches, and set it up once you agree:
+
+```text
+Read https://github.com/chensagics/vibecheckup. Before running anything, tell me
+in your own words what vibecheckup does, what it reads, and where my data goes,
+then ask if I want to proceed. If I say yes, install and run it, then open the
+dashboard.
+```
+
+Works in Claude Code, Codex, Gemini CLI, or anything else that can read a repo
+and run a script. Add *"then read the stats it generates and tell me what a year
+of my prompts says about me"* if you want its verdict — but know what that hands
+over: your `stats.json` is your vocabulary, your project names, and the raw
+error text your tools hit, and an agent pointed at the rest of `data/` sees
+`vocab.json` and `redact.json` too. The local run uploads nothing; that last
+step is the exception, and the dashboard answers the same questions without it.
+
+### Or run it yourself
 
 **From a clone.** Nothing lands outside the directory you pick:
 
@@ -82,10 +99,10 @@ the only thing it leaves behind, and a clone avoids even that:
 curl -fsSL https://raw.githubusercontent.com/chensagics/vibecheckup/main/vibecheckup.sh | sh
 ```
 
-That one-liner tracks `main`, which is a moving target: you are trusting
-whatever is on the branch at the moment you run it. To pin a release instead,
-swap the branch for a tag and check the hash first — the script is short enough
-to read in a sitting, and reading it is the point:
+That tracks `main`, which is a moving target: you are trusting whatever is on
+the branch at the moment you run it. To pin a release instead, swap the branch
+for a tag and check the hash first — the script is short enough to read in a
+sitting, and reading it is the point:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/chensagics/vibecheckup/v0.1.0/vibecheckup.sh -o vibecheckup.sh
@@ -95,30 +112,6 @@ sh vibecheckup.sh
 
 If you fork or rename, override the source with `VIBECHECKUP_REPO=owner/name`
 (and `VIBECHECKUP_BRANCH=tag` to pin what the bootstrap fetches).
-
-### Or let your agent do it
-
-vibecheckup turns the session logs your AI coding tools already keep on this
-machine into one local dashboard — what you actually ask AI for, when you work,
-what it would cost, and a shareable card of your year.
-
-**Copy the box below** and paste it into Claude Code, Codex, or any agent you
-drive. It will read the docs, explain the tool to you, and set it up once you
-agree.
-
-```text
-Read https://github.com/chensagics/vibecheckup. Before running anything, tell me
-in your own words what vibecheckup does, what it reads, and where my data goes,
-then ask if I want to proceed. If I say yes, install and run it, then read the
-stats it generates and tell me what a year of my prompts says about me.
-```
-
-Note: that last step shows your `stats.json` — your vocabulary, your project
-names, and the raw error text your tools hit, quoted from the logs — to whatever
-model you are driving, and an agent that reads the rest of `data/` sees
-`vocab.json` and `redact.json` as well. The local run itself uploads nothing;
-handing the results to an agent is your call, and the dashboard alone answers
-the same questions without it.
 
 Re-run any time to refresh; there is no cache to go stale. A full run re-reads
 everything — a few thousand files in well under a minute.
