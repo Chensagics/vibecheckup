@@ -1,0 +1,40 @@
+name: CI
+
+# The suite needs no dependencies and no network, so this is the whole of it.
+# The matrix is the point: a dataclass(slots=True) that only exists in 3.10+
+# once shipped here and broke every entry point on the python3 that macOS
+# actually ships, which the README itself tells a bare Mac to install.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ['3.9', '3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Tests
+        run: python3 -m unittest discover -s tests
+      - name: Pipeline end to end, on the synthetic corpus
+        run: ./vibecheckup.sh --demo --force --no-open
+
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax, every shell the bootstrap claims to run under
+        run: |
+          for sh in sh bash dash; do "$sh" -n vibecheckup.sh || exit 1; done
+      - uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: '.'
+          format: gcc

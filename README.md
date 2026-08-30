@@ -82,8 +82,19 @@ the only thing it leaves behind, and a clone avoids even that:
 curl -fsSL https://raw.githubusercontent.com/chensagics/vibecheckup/main/vibecheckup.sh | sh
 ```
 
-> The raw URL above points at `chensagics/vibecheckup` — **the final public repo
-> path**. If you fork or rename, override it with `VIBECHECKUP_REPO=owner/name`.
+That one-liner tracks `main`, which is a moving target: you are trusting
+whatever is on the branch at the moment you run it. To pin a release instead,
+swap the branch for a tag and check the hash first — the script is short enough
+to read in a sitting, and reading it is the point:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/chensagics/vibecheckup/v0.1.0/vibecheckup.sh -o vibecheckup.sh
+shasum -a 256 vibecheckup.sh    # compare against the release notes
+sh vibecheckup.sh
+```
+
+If you fork or rename, override the source with `VIBECHECKUP_REPO=owner/name`
+(and `VIBECHECKUP_BRANCH=tag` to pin what the bootstrap fetches).
 
 ### Or let your agent do it
 

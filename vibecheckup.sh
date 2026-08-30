@@ -247,7 +247,13 @@ fi
 [ -f "$DASH" ] || die "expected $DASH to exist after the build"
 
 printf '\n✓ vibecheckup is ready: %s\n' "$DASH"
-printf '  Keep that file private: it carries your project names and error text.\n'
+# After --demo the page is built from the synthetic corpus, so the usual
+# warning would be telling you to guard invented projects.
+if [ "$DEMO" = 1 ]; then
+  printf '  Synthetic corpus — none of this is your data.\n'
+else
+  printf '  Keep that file private: it carries your project names and error text.\n'
+fi
 
 # --scrub is a request to inspect the copy you are about to hand over, so that
 # is the one that opens. dashboard.html is written either way.
