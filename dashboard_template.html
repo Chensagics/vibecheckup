@@ -3,13 +3,24 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>vibecheckup</title>
+<!-- A checkup reads a pulse. Inline so the page still fetches nothing: an
+     external icon would be the one request the privacy section says we make
+     none of. The tile is the accent rather than the page colour so the mark
+     holds against a dark tab strip as well as a light one, and the trace is
+     three strokes because five turned to mush at 16px. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232a78d6'/%3E%3Cpath d='M4 16h5l2-6 4 12 2.5-7 1.5 1h5' fill='none' stroke='%23fff' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <style>
 :root{
   color-scheme: light;
   --page:#eceeea; --surface-1:#fcfcfb; --surface-2:#f4f5f2;
   --ink:#0b0b0b; --ink-2:#52514e; --ink-3:#84837c;
   --rule:#dcdcd6; --rule-strong:#c2c2ba;
+  /* Six categorical slots, one per source. --s6 is the sixth and sits in the
+     one hue gap the other five leave (blue 256deg -> pink 357deg); it is dark
+     for its hue on purpose, because a purple at the family lightness is what
+     a deuteranope cannot tell from --s1. See the palette note in the README. */
   --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100; --s5:#e87ba4;
+  --s6:#7832a5;
   --seq-1:#cde2fb; --seq-2:#9ec5f4; --seq-3:#6da7ec; --seq-4:#3987e5;
   --seq-5:#256abf; --seq-6:#184f95; --seq-7:#0d366b;
   --focus:#2a78d6;
@@ -24,6 +35,7 @@
     --ink:#ffffff; --ink-2:#c3c2b7; --ink-3:#8d8c83;
     --rule:#302f2d; --rule-strong:#454440;
     --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181;
+    --s6:#874cb0;
     --seq-1:#0d366b; --seq-2:#184f95; --seq-3:#256abf; --seq-4:#3987e5;
     --seq-5:#6da7ec; --seq-6:#9ec5f4; --seq-7:#cde2fb;
     --focus:#6da7ec;
@@ -35,6 +47,7 @@
   --ink:#ffffff; --ink-2:#c3c2b7; --ink-3:#8d8c83;
   --rule:#302f2d; --rule-strong:#454440;
   --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181;
+  --s6:#874cb0;
   --seq-1:#0d366b; --seq-2:#184f95; --seq-3:#256abf; --seq-4:#3987e5;
   --seq-5:#6da7ec; --seq-6:#9ec5f4; --seq-7:#cde2fb;
   --focus:#6da7ec;
@@ -387,9 +400,10 @@ const S = JSON.parse(document.getElementById('statsdata').textContent);
 // its Spend tab simply shows the empty state.
 const SCHEMA_OK = [1, 2];
 const TOOL_COLOR = {claude_code:'--s1', codex:'--s2', grok:'--s3',
-                    gemini_cli:'--s4', antigravity:'--s5'};
+                    gemini_cli:'--s4', antigravity:'--s5', cursor:'--s6'};
 const TOOL_LABEL = {claude_code:'Claude Code', codex:'Codex', grok:'Grok CLI',
-                    gemini_cli:'Gemini CLI', antigravity:'Antigravity'};
+                    gemini_cli:'Gemini CLI', antigravity:'Antigravity',
+                    cursor:'Cursor'};
 const cssv = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const toolColor = t => cssv(TOOL_COLOR[t] || '--ink-3');
 const fmt = n => (n||0).toLocaleString('en-US');

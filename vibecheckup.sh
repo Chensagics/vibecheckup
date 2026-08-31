@@ -33,7 +33,7 @@ Options:
                     project names, error text or shell commands, and open that
                     one instead. dashboard.html is still written, unchanged.
   --tool NAME       limit ingest to one source (repeatable):
-                    claude_code, codex, grok, gemini_cli, antigravity
+                    claude_code, codex, grok, gemini_cli, antigravity, cursor
   --limit N         cap files per source (quick smoke run)
   --no-open         build the dashboard but do not open a browser
   -h, --help        this message

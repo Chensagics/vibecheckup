@@ -5,7 +5,7 @@
 **A local vibecheckup on your AI coding year.**
 
 One command reads the session logs already on your machine — Claude Code, Codex,
-Grok CLI, Gemini CLI, Antigravity — and builds a single self-contained
+Grok CLI, Gemini CLI, Antigravity, Cursor — and builds a single self-contained
 `dashboard.html`: your **Agent Wrapped**, your **Lexicon**, your **Spend**.
 
 Nothing is uploaded. Nothing is installed either — no packages, no system-wide
@@ -70,9 +70,9 @@ copy instead — and read [Privacy](#privacy) before you post anything:
 ./vibecheckup.sh --scrub    # also writes dashboard-shareable.html, and opens that
 ```
 
-**Nothing found?** It reads Claude Code, Codex, Grok CLI, Gemini CLI and
-Antigravity; any it cannot find are skipped and named in the run report. The
-exact paths are in [Sources](#sources).
+**Nothing found?** It reads Claude Code, Codex, Grok CLI, Gemini CLI,
+Antigravity and Cursor; any it cannot find are skipped and named in the run
+report. The exact paths are in [Sources](#sources).
 
 → [What you get](#three-faces-of-one-file) · [Other ways to run it](#other-ways-to-run-it) · [Where your data goes](#privacy)
 
@@ -109,6 +109,8 @@ Token usage is extracted natively from the same logs — no Node, no `ccusage` a
 runtime — and priced from a bundled table: total, rolling 7 / 30 days, cache-hit
 rate, cost per day, spend by model and by tool. Grok CLI and Antigravity log no
 usage at all and are badged **no usage data** instead of being counted as zero.
+Cursor is in between: it stamps a token count on a minority of messages and
+names no model for them, so its tokens are counted and reported unpriced.
 
 <!-- assets/dashboard.png — the Overview tab: the coverage rail and the
      headline cloud. Generated from `./vibecheckup.sh --demo` so it contains no
@@ -156,7 +158,7 @@ If you fork or rename, override the source with `VIBECHECKUP_REPO=owner/name`
 | `--demo` | Build from a deterministic synthetic corpus (`samples/generate.py`). Never touches your real logs. |
 | `--force`, `-f` | With `--demo`, overwrite an existing `data/events.ndjson` without asking. |
 | `--scrub` | Also write `dashboard-shareable.html` — the same page without project names, error text, shell commands or MCP server names — and open that one. `dashboard.html` is still written, unchanged. See [Privacy](#privacy). |
-| `--tool NAME` | Limit ingest to one source; repeatable. `claude_code`, `codex`, `grok`, `gemini_cli`, `antigravity`. |
+| `--tool NAME` | Limit ingest to one source; repeatable. `claude_code`, `codex`, `grok`, `gemini_cli`, `antigravity`, `cursor`. |
 | `--limit N` | Cap files per source — a quick smoke run. |
 | `--no-open` | Build the dashboard but don't open a browser. |
 | `-h`, `--help` | Usage. Answered before anything is downloaded, so `curl … \| sh -s -- --help` costs nothing. |
@@ -336,6 +338,7 @@ and are the cheapest possible contribution.
 | Grok CLI | `~/.grok/sessions/<enc-cwd>/<id>/chat_history.jsonl` | no per-message timestamps, no usage data |
 | Gemini CLI | `~/.gemini/tmp/*/chats/session-*.json` | plain JSON; priced |
 | Antigravity | `~/.gemini/antigravity-cli/conversations/*.db` | SQLite + schema-less protobuf; heuristic, no usage data |
+| Cursor | `<app data>/Cursor/User/globalStorage/state.vscdb` | one SQLite key/value store for every chat; see below for what it does and does not keep |
 
 ## How it works
 
@@ -435,19 +438,74 @@ empirically by reading extracted text across a 40-conversation sample. Every
 event from this adapter carries `confidence: "heuristic"` and is badged as such
 in the dashboard.
 
+### Cursor keeps everything in one database, and not all of it
+
+Cursor has no per-session file. Every chat lives in one SQLite key/value store,
+`cursorDiskKV`, under three keys that matter: `composerData:<id>` is the
+conversation, `bubbleId:<composerId>:<bubbleId>` is a message, and the rest is
+editor state. Bubble `type` is the record type — **1 = user, 2 = assistant** —
+and an assistant bubble is sub-classified by `capabilityType` into a prose
+reply, a tool call, or a reasoning summary. Those are named JSON fields with a
+discriminator Cursor repeats in its own header index, so every event is
+`confidence: "exact"`, unlike Antigravity above.
+
+**Recovered:** prompts, replies, tool calls with their arguments and results,
+shell commands and exit codes, tool failures, per-message timestamps, and the
+project — resolved from the folder URI the bubbles carry, or failing that by
+joining the conversation id against the per-workspace databases in
+`workspaceStorage/`, which hold a `workspace.json` naming the folder. A chat
+that resolves to no folder is labelled `unknown`; the workspace hash is an
+opaque local id and is never published as a project name.
+
+**Not recovered, on purpose or because it is not there:**
+
+- `composerData.conversation` is empty and message order comes from
+  `fullConversationHeadersOnly`. It disagreed with a timestamp sort in 3 of 7
+  local conversations, so the header list wins.
+- Token counts exist on a minority of messages only, and the messages that have
+  them name no model — Cursor records its "Auto" setting rather than what ran.
+  Those tokens are counted and reported **unpriced** rather than guessed at.
+  There is no cached-input figure at all, so the cache columns read 0.
+- Most reasoning summaries hold only the provider's *encrypted* signature with
+  an empty text field; Cursor cannot show them either. Here that was 76 of 94.
+- The per-workspace `aiService.prompts` lists duplicate the user bubbles with no
+  timestamps, so they are skipped — reading both would double every prompt.
+- `agentKv:` holds assembled request payloads — system prompt, injected rules,
+  tool schemas — which nobody authored, and a quarter of them are binary. Not
+  read.
+- Cursor prunes conversations before their messages: 50 of 57 composers here had
+  no messages left. Nothing can recover those.
+
+Cursor's databases are opened **read-only, always**, and with the same
+`immutable=1`-then-fall-back dance the Antigravity adapter uses: `immutable=1`
+makes SQLite ignore the write-ahead log, which on a database Cursor is still
+writing to looks exactly like corruption.
+
+### The palette has six slots, and the sixth was the hard one
+
+Each source gets one categorical colour (`--s1`…`--s6`). The sixth sits in the
+one hue gap the other five leave, between `--s1` blue and `--s5` pink — but a
+purple at the same *lightness* as `--s1` is precisely what a deuteranope cannot
+tell from it, and in dark mode that pair fell to ΔE 1.1. So `--s6` is deliberately
+dark for its hue in both themes: it clears ΔE 9.6 (dark) and 10.3 (light)
+against every other slot under simulated protanopia and deuteranopia, above the
+ΔE 8 target, while still holding 3:1 contrast against both surfaces. Adding it
+made no pair in the palette worse than it already was.
+
 ## Layout
 
 ```
 vibecheckup.sh        bootstrap: check python3, run the three stages, open the page
 ingest.py  analyze.py  build_dashboard.py  dashboard_template.html
 adapters/   base.py protoscan.py claude_code.py codex.py grok.py
-            gemini_cli.py antigravity.py
+            gemini_cli.py antigravity.py cursor.py
 wcstats/    clean.py tokenize.py score.py facets.py spend.py wrapped.py
             prices.json
 samples/    generate.py         deterministic synthetic corpus for --demo
 tests/      test_all.py test_bootstrap.py test_i18n_time.py test_projects.py
             test_redaction.py test_scrub.py test_selfredact.py
-            test_snapshot.py test_vocab_gate.py  fixtures/
+            test_snapshot.py test_vocab_gate.py test_wrapped_quality.py
+            fixtures/
 snapshot.py                     keep a dated copy of a built dashboard
                                 (--scrub keeps the shareable one instead;
                                  --list flags copies built by older rules)
@@ -470,7 +528,7 @@ python3 -m unittest discover -s tests   # fixtures only, no network
 ./vibecheckup.sh --demo --no-open         # full pipeline on synthetic data
 ```
 
-**384 tests on a fresh clone, 404 once you have built a dashboard.** The
+**503 tests on a fresh clone, 523 once you have built a dashboard.** The
 difference is the checks that read `data/stats.json` and `dashboard.html`; with
 nothing built yet they skip rather than fail, so a clone with no logs still runs
 green.

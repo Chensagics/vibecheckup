@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import unittest
 from collections import Counter
@@ -12,7 +13,8 @@ ROOT = os.path.dirname(HERE)
 FIX = os.path.join(HERE, "fixtures")
 sys.path.insert(0, ROOT)
 
-from adapters import antigravity, claude_code, codex, gemini_cli, grok  # noqa: E402
+from adapters import (ADAPTERS, antigravity, claude_code, codex,  # noqa: E402
+                      cursor, gemini_cli, grok)
 from adapters.base import argv_head, decode_dash_path, iso, usage  # noqa: E402
 from adapters.protoscan import extract_strings  # noqa: E402
 from analyze import SCHEMA_VERSION  # noqa: E402
@@ -248,6 +250,322 @@ class TestGeminiAdapter(unittest.TestCase):
 
     def test_no_unknown_types(self):
         self.assertEqual(dict(self.rep.unknowns), {})
+
+
+# --- Cursor -----------------------------------------------------------------
+#
+# Cursor keeps every chat in one SQLite key/value store, so there is no small
+# file to check in as a fixture -- and a real one would be somebody's actual
+# prompts. The store is built here instead, from invented text, in the shape
+# the adapter documents.
+
+CUR_CONVO = "c0000000-0000-4000-8000-000000000001"
+CUR_ORPHAN = "c0000000-0000-4000-8000-000000000002"
+CUR_JOINED = "c0000000-0000-4000-8000-000000000003"
+CUR_BLANK = "c0000000-0000-4000-8000-000000000004"
+
+
+def _cursor_store(tmp, rows, workspaces=()):
+    """Write a Cursor-shaped globalStorage store and return its db path.
+
+    `rows` is (key, value) straight into cursorDiskKV, so a test can put a NULL
+    or a torn string in a slot the adapter expects JSON in. `workspaces` is
+    (hash, folder-uri, [composerId, ...]) for the workspaceStorage join.
+    """
+    import sqlite3
+    user = os.path.join(tmp, "User")
+    gs = os.path.join(user, "globalStorage")
+    os.makedirs(gs, exist_ok=True)
+    db = os.path.join(gs, "state.vscdb")
+    con = sqlite3.connect(db)
+    con.execute("create table ItemTable (key text primary key, value blob)")
+    con.execute("create table cursorDiskKV (key text primary key, value blob)")
+    con.executemany("insert into cursorDiskKV (key, value) values (?, ?)", rows)
+    con.commit()
+    con.close()
+
+    for whash, folder, cids in workspaces:
+        wdir = os.path.join(user, "workspaceStorage", whash)
+        os.makedirs(wdir, exist_ok=True)
+        with open(os.path.join(wdir, "workspace.json"), "w",
+                  encoding="utf-8") as fh:
+            json.dump({"folder": folder}, fh)
+        wcon = sqlite3.connect(os.path.join(wdir, "state.vscdb"))
+        wcon.execute("create table ItemTable (key text primary key, value blob)")
+        wcon.execute(
+            "insert into ItemTable (key, value) values ('composer.composerData', ?)",
+            (json.dumps({"allComposers": [{"composerId": c} for c in cids]}),))
+        wcon.commit()
+        wcon.close()
+    return db
+
+
+def _bubble(cid, bid, **kw):
+    d = {"bubbleId": bid, "createdAt": "2026-01-28T22:52:05.309Z"}
+    d.update(kw)
+    return (f"bubbleId:{cid}:{bid}", json.dumps(d))
+
+
+class TestCursorAdapter(unittest.TestCase):
+    """One conversation, every bubble shape the store actually holds."""
+
+    def setUp(self):
+        import shutil
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        composer = {
+            "composerId": CUR_CONVO,
+            "createdAt": 1769640725000,
+            "modelConfig": {"modelName": "gpt-5.2-codex"},
+            # Rendered order, and deliberately NOT the createdAt order: the
+            # reply below is stamped earlier than the tool call it follows.
+            "fullConversationHeadersOnly": [
+                {"bubbleId": "b1", "type": 1},
+                {"bubbleId": "b2", "type": 2},
+                {"bubbleId": "b3", "type": 2},
+                {"bubbleId": "b4", "type": 2},
+                {"bubbleId": "b5", "type": 2},
+            ],
+        }
+        rows = [
+            (f"composerData:{CUR_CONVO}", json.dumps(composer)),
+            _bubble(CUR_CONVO, "b1", type=1,
+                    text="how do i point this at a second staging bucket",
+                    workspaceUris=["file:///Users/x/Projects/harbour%20gate"]),
+            _bubble(CUR_CONVO, "b2", type=2, capabilityType=30,
+                    thinking={"text": "They want a second bucket, not a rename.",
+                              "signature": "opaque"}),
+            _bubble(CUR_CONVO, "b3", type=2, capabilityType=15,
+                    toolFormerData={
+                        "name": "run_terminal_cmd", "status": "completed",
+                        "rawArgs": json.dumps({"command": "npm run deploy -- --dry"}),
+                        "result": json.dumps({"exitCodeV2": 0}),
+                    }),
+            _bubble(CUR_CONVO, "b4", type=2, capabilityType=15,
+                    toolFormerData={
+                        "name": "search_replace", "status": "error",
+                        "rawArgs": json.dumps({"file_path": "/Users/x/Projects/harbour gate/deploy.ts"}),
+                        "error": {"modelVisibleErrorMessage":
+                                  "The string to replace was not found in the file."},
+                    }),
+            _bubble(CUR_CONVO, "b5", type=2,
+                    createdAt="2026-01-28T22:52:04.000Z",
+                    text="Added a second bucket rather than renaming the first.",
+                    tokenCount={"inputTokens": 11687, "outputTokens": 254}),
+        ]
+        db = _cursor_store(self.tmp, rows)
+        self.ev, self.rep = collect(cursor, db)
+
+    def test_type_one_is_the_user_and_type_two_the_assistant(self):
+        self.assertEqual([(e.role, e.kind) for e in self.ev],
+                         [("user", "prompt"), ("assistant", "thinking"),
+                          ("assistant", "tool_call"), ("tool", "tool_result"),
+                          ("assistant", "tool_call"), ("tool", "error"),
+                          ("assistant", "reply")])
+
+    def test_header_order_beats_created_at(self):
+        """fullConversationHeadersOnly is what Cursor renders. b5 is stamped a
+        second BEFORE b1 and still belongs last; sorting by createdAt put the
+        reply ahead of the prompt it answers in 3 of 7 real conversations."""
+        self.assertEqual(self.ev[-1].text,
+                         "Added a second bucket rather than renaming the first.")
+
+    def test_prompt_text_recovered(self):
+        p = next(e for e in self.ev if e.kind == "prompt")
+        self.assertEqual(p.text,
+                         "how do i point this at a second staging bucket")
+
+    def test_thinking_comes_from_the_nested_text_not_the_signature(self):
+        t = next(e for e in self.ev if e.kind == "thinking")
+        self.assertEqual(t.text, "They want a second bucket, not a rename.")
+
+    def test_tool_call_carries_command_and_exit_code(self):
+        c = next(e for e in self.ev if e.tool_name == "run_terminal_cmd")
+        self.assertEqual(c.cmd, "npm run deploy -- --dry")
+        r = next(e for e in self.ev
+                 if e.kind == "tool_result" and e.tool_name == "run_terminal_cmd")
+        self.assertEqual(r.exit_code, 0)
+
+    def test_failed_tool_becomes_an_error_with_the_message_the_model_saw(self):
+        e = next(x for x in self.ev if x.kind == "error")
+        self.assertEqual(e.text,
+                         "The string to replace was not found in the file.")
+        self.assertEqual(e.tool_name, "search_replace")
+
+    def test_tool_call_text_is_the_path_it_touched(self):
+        c = next(e for e in self.ev if e.tool_name == "search_replace"
+                 and e.kind == "tool_call")
+        self.assertTrue(c.text.endswith("deploy.ts"), c.text)
+
+    def test_usage_attaches_once_with_the_composer_model(self):
+        u = [e for e in self.ev if e.usage]
+        self.assertEqual(len(u), 1)
+        self.assertEqual(u[0].model, "gpt-5.2-codex")
+        # Cursor reports one undifferentiated input figure -- no cached subset
+        # is broken out -- so the two cache slots stay 0.
+        self.assertEqual(u[0].usage, {"input": 11687, "output": 254,
+                                      "cache_read": 0, "cache_write": 0})
+
+    def test_timestamps_are_exact_and_per_bubble(self):
+        self.assertTrue(all(e.ts_exact for e in self.ev))
+        self.assertTrue(self.ev[0].ts.startswith("2026-01-28T22:52:05"))
+
+    def test_confidence_is_exact(self):
+        """Named JSON fields and a type discriminator Cursor repeats in its own
+        header index -- nothing here was read off a payload the way
+        antigravity's protobuf step types had to be."""
+        self.assertTrue(all(e.confidence == "exact" for e in self.ev))
+
+    def test_percent_escape_in_the_workspace_uri_is_decoded(self):
+        self.assertTrue(all(e.project == "harbour gate" for e in self.ev))
+
+    def test_no_unknown_types(self):
+        self.assertEqual(dict(self.rep.unknowns), {})
+
+
+class TestCursorProjectResolution(unittest.TestCase):
+    def setUp(self):
+        import shutil
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def _run(self, rows, workspaces=()):
+        db = _cursor_store(self.tmp, rows, workspaces)
+        return collect(cursor, db)
+
+    def test_composer_workspace_identifier_wins(self):
+        rows = [
+            (f"composerData:{CUR_CONVO}", json.dumps({
+                "workspaceIdentifier": {
+                    "id": "deadbeef",
+                    "uri": {"fsPath": "/Users/x/Projects/lighthouse"}}})),
+            _bubble(CUR_CONVO, "b1", type=1, text="ship it"),
+        ]
+        ev, _ = self._run(rows)
+        self.assertEqual(ev[0].project, "lighthouse")
+
+    def test_workspace_storage_join_when_the_bubbles_carry_no_path(self):
+        """The composer and its bubbles name no folder; the only link is that
+        this workspace's own composer.composerData lists the id."""
+        rows = [
+            (f"composerData:{CUR_JOINED}", json.dumps({})),
+            _bubble(CUR_JOINED, "b1", type=1, text="rerun the migration"),
+        ]
+        ev, _ = self._run(rows, [("9f42f69f", "file:///Users/x/Projects/tideway",
+                                  [CUR_JOINED])])
+        self.assertEqual(ev[0].project, "tideway")
+
+    def test_unresolvable_conversation_never_leaks_the_workspace_hash(self):
+        rows = [
+            (f"composerData:{CUR_BLANK}", json.dumps({})),
+            _bubble(CUR_BLANK, "b1", type=1, text="what changed here"),
+        ]
+        ev, _ = self._run(rows, [("9f42f69f", "file:///Users/x/Projects/tideway",
+                                  ["some-other-composer"])])
+        self.assertEqual(ev[0].project, "unknown")
+        self.assertNotIn("9f42f69f", [e.project for e in ev])
+
+    def test_worktree_path_folds_onto_its_repo(self):
+        """A Cursor window opened on a worktree must be attributed the same way
+        every other adapter attributes one -- by repo, never by branch."""
+        rows = [
+            (f"composerData:{CUR_CONVO}", json.dumps({})),
+            _bubble(CUR_CONVO, "b1", type=1, text="rebase this",
+                    workspaceUris=["file:///Users/x/finn/.claude/worktrees/native-ota"]),
+        ]
+        ev, _ = self._run(rows)
+        self.assertEqual(ev[0].project, "finn")
+
+
+class TestCursorDamage(unittest.TestCase):
+    """Cursor is very likely running while this reads, and its store holds
+    NULLs and binary blobs beside the JSON. None of that may be fatal."""
+
+    def setUp(self):
+        import shutil
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def _run(self, rows):
+        return collect(cursor, _cursor_store(self.tmp, rows))
+
+    def test_torn_and_null_values_are_counted_not_raised(self):
+        rows = [
+            (f"composerData:{CUR_CONVO}", json.dumps({})),
+            (f"composerData:{CUR_ORPHAN}", None),
+            ("composerData:empty-state-draft", "{not json at all"),
+            _bubble(CUR_CONVO, "b1", type=1, text="still here"),
+            (f"bubbleId:{CUR_CONVO}:b2", "}}garbage"),
+            (f"bubbleId:{CUR_CONVO}:b3", None),
+            (f"bubbleId:{CUR_CONVO}:b4", b"\x00\xbc\xff binary"),
+        ]
+        ev, rep = self._run(rows)
+        self.assertEqual([e.text for e in ev], ["still here"])
+        self.assertEqual(rep.bad, 5)
+
+    def test_unknown_bubble_type_is_reported_and_dropped(self):
+        rows = [
+            (f"composerData:{CUR_CONVO}", json.dumps({})),
+            _bubble(CUR_CONVO, "b1", type=1, text="keep me"),
+            _bubble(CUR_CONVO, "b2", type=7, text="a type that did not exist yet"),
+        ]
+        ev, rep = self._run(rows)
+        self.assertEqual([e.text for e in ev], ["keep me"])
+        self.assertEqual(dict(rep.unknowns), {"type/7": 1})
+
+    def test_unknown_capability_is_reported_but_its_prose_is_kept(self):
+        """A new capabilityType must be visible in the run report -- and its
+        text must still reach the corpus rather than vanishing silently."""
+        rows = [
+            (f"composerData:{CUR_CONVO}", json.dumps({})),
+            _bubble(CUR_CONVO, "b1", type=2, capabilityType=99,
+                    text="something a later Cursor learned to do"),
+        ]
+        ev, rep = self._run(rows)
+        self.assertEqual([(e.role, e.kind) for e in ev], [("assistant", "reply")])
+        self.assertEqual(dict(rep.unknowns), {"capabilityType/99": 1})
+
+    def test_bubbles_survive_a_pruned_composer(self):
+        """Cursor drops composerData long before the bubbles go with it: 50 of
+        57 composers here had no messages left, and the reverse must not lose
+        the messages."""
+        rows = [_bubble(CUR_ORPHAN, "b1", type=1, text="the composer is gone"),
+                _bubble(CUR_ORPHAN, "b2", type=2, text="the messages are not")]
+        ev, rep = self._run(rows)
+        self.assertEqual([e.text for e in ev],
+                         ["the composer is gone", "the messages are not"])
+        self.assertEqual(dict(rep.unknowns), {"composerData/missing": 1})
+
+    def test_textless_bubbles_emit_nothing(self):
+        """376 of 399 assistant bubbles here carry no text at all, and 76 of
+        the thinking ones hold only the provider's encrypted signature."""
+        rows = [
+            (f"composerData:{CUR_CONVO}", json.dumps({})),
+            _bubble(CUR_CONVO, "b1", type=2, text=""),
+            _bubble(CUR_CONVO, "b2", type=2, capabilityType=30,
+                    thinking={"text": "", "signature": "encrypted"}),
+            _bubble(CUR_CONVO, "b3", type=2, capabilityType=15,
+                    toolFormerData={"additionalData": {"status": "error"}}),
+        ]
+        ev, rep = self._run(rows)
+        self.assertEqual(ev, [])
+        self.assertEqual(dict(rep.unknowns), {})
+
+    def test_a_missing_store_is_not_discovered(self):
+        self.assertNotIn(os.path.join(self.tmp, "nope"), cursor.discover())
+
+    def test_unreadable_database_is_one_bad_file(self):
+        gs = os.path.join(self.tmp, "User", "globalStorage")
+        os.makedirs(gs, exist_ok=True)
+        db = os.path.join(gs, "state.vscdb")
+        with open(db, "wb") as fh:
+            fh.write(b"this is not a database")
+        ev, rep = collect(cursor, db)
+        self.assertEqual(ev, [])
+        self.assertEqual(rep.bad, 1)
 
 
 class TestUsageNormalization(unittest.TestCase):
@@ -1088,6 +1406,38 @@ class TestTemplateContract(unittest.TestCase):
         """"SPEND (EST.)" alone reads as a bill once the card is a JPEG on
         somebody else's timeline."""
         self.assertIn("list prices · not a bill", self.t)
+
+    def _tool_map(self, name):
+        body = self.t[self.t.index(f"const {name} = {{") + len(f"const {name} = "):]
+        return dict(re.findall(r"(\w+)\s*:\s*'([^']+)'",
+                               body[:body.index("};")]))
+
+    def test_every_source_has_its_own_colour_and_a_display_name(self):
+        """A source with no TOOL_COLOR slot falls through to --ink-3, so it
+        draws in the same grey as every other unmapped one and the chart
+        silently stops distinguishing them."""
+        colors, labels = self._tool_map("TOOL_COLOR"), self._tool_map("TOOL_LABEL")
+        self.assertEqual(set(colors), set(ADAPTERS))
+        self.assertEqual(set(labels), set(ADAPTERS))
+        self.assertEqual(len(set(colors.values())), len(ADAPTERS),
+                         "two sources share a slot: " + repr(colors))
+
+    def test_every_tool_slot_is_defined_in_light_and_in_both_darks(self):
+        """Dark is written twice -- once under prefers-color-scheme and once
+        under [data-theme="dark"] -- so a slot added to only one of them is
+        empty for either the OS setting or the toggle, and cssv() then returns
+        "" and the mark draws transparent."""
+        blocks = {
+            "light": self.t[self.t.index(":root{"):self.t.index("@media (prefers")],
+            "media dark": self.t[self.t.index("@media (prefers"):
+                                 self.t.index(':root[data-theme="dark"]')],
+            "toggle dark": self.t[self.t.index(':root[data-theme="dark"]'):
+                                  self.t.index("*{box-sizing")],
+        }
+        for slot in sorted(set(self._tool_map("TOOL_COLOR").values())):
+            for where, block in blocks.items():
+                self.assertRegex(block, re.escape(slot) + r"\s*:\s*#[0-9a-f]{6}",
+                                 f"{slot} missing from the {where} palette")
 
     def test_nothing_claims_the_user_typed_it(self):
         """A prompt event is whatever arrived in the user's turn -- typed,
