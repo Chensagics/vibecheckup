@@ -91,6 +91,11 @@ INJECTED_MARKERS = (
     "outstanding user requests",
     "conversation summary",
     "the conversation is being continued",
+    # Antigravity returns a file read as an assistant *reply*, under a fixed
+    # banner. Its wording ("line number, colon, and leading space") was the
+    # model's own distinctive vocabulary as far as the clouds could tell, and
+    # it took four of the top ten things Claude supposedly says.
+    "has been modified to include a line number before every line",
 )
 
 # --- line-level noise --------------------------------------------------------
@@ -269,6 +274,24 @@ def looks_like_code(text: str) -> bool:
 # `"type":`  ·  `{"winner": "A|B|tie"}`  ·  `"$schema":`  ·  `, "path": "x"`
 RE_JSON_KEY = re.compile(r"""^[\s\[{,]*["'][A-Za-z_$@][\w.\-$]{0,39}["']\s*:""")
 
+# A data ROW, judged by the pair rather than by the key. The rule above is
+# deliberately narrow about what a key may contain, and that bound is what let
+# a pasted translation table through as authored prose: its keys are file
+# paths (`"src/data/academy/compiled.ar.json.10.script.4.chat"`) or whole
+# English sentences, so neither the charset nor the 40-character limit fits,
+# every row classified as PROSE, and one paste contributed 5,000 tokens of
+# Arabic UI copy the owner never typed. Ten such messages were a third of the
+# corpus.
+#
+# What makes a row data is not the key: it is a quoted key sitting against a
+# structured value -- another quoted string, a bracket, a number, a keyword.
+# Prose does not do that. A labelled sentence ("Note: read this first") has no
+# quotes around the label, and a quoted phrase mid-sentence has no colon after
+# the closing quote.
+RE_JSON_ROW = re.compile(
+    r"""^[\s\[{,]*(?P<q>["'])(?:(?!(?P=q))[^\n]){1,200}(?P=q)\s*:\s*"""
+    r"""(?:["'\[{]|true\b|false\b|null\b|-?\d)""", re.I)
+
 # Structure with no claim of its own: brackets, separators, a lone scalar or
 # quoted enum member, an INI/TOML section header.
 RE_STRUCT_PUNCT = re.compile(r"^[\[\]{}(),;:]+$")
@@ -302,7 +325,8 @@ def struct_class(line: str) -> int:
     s = (line or "").strip()
     if not s:
         return STRUCT_BLANK
-    if RE_JSON_KEY.match(s) or RE_INI_SECTION.match(s):
+    if (RE_JSON_KEY.match(s) or RE_JSON_ROW.match(s)
+            or RE_INI_SECTION.match(s)):
         return STRUCT_STRONG
     if (RE_STRUCT_PUNCT.match(s) or RE_STRUCT_SCALAR.match(s)
             or RE_FRONTMATTER.match(s)):

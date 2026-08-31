@@ -378,11 +378,25 @@ class TestStructuredData(unittest.TestCase):
                      '{"winner": "A|B|tie"},', '"apiKeyHelper": {'):
             self.assertEqual(struct_class(line), STRUCT_STRONG, line)
 
-    def test_sentence_key_is_not_a_json_key(self):
-        """The owner's Arabic vocabulary lives in translation files whose keys
-        are whole English sentences. A rule that took any quoted key would eat
-        the most unmistakably-his thing on the card."""
+    def test_sentence_key_is_a_json_key_after_all(self):
+        """Reversed, on the evidence of the people who got the card.
+
+        This used to assert the opposite: a translation file's sentence-shaped
+        keys were left as prose on the theory that the Arabic values behind
+        them were the most unmistakably-his thing on the card. They were not
+        his at all. They are machine-generated UI copy that he pasted in to be
+        translated, and readers said so unprompted -- `السعر` came tenth in his
+        most-used words, ahead of `data` and `files`, off two pasted tables.
+
+        A quoted key against a quoted value is a data row whatever the key
+        looks like. What the owner actually types in another script is a
+        sentence, and that still survives -- see the test below."""
         line = '"When the chart turns red": "عندما يتحول الرسم البياني",'
+        self.assertEqual(struct_class(line), STRUCT_STRONG)
+
+    def test_typed_arabic_sentence_still_survives(self):
+        """The cost of the rule above must not be the owner's own languages."""
+        line = "اجعل الرسم البياني أحمر عندما ينخفض السهم"
         self.assertEqual(struct_class(line), STRUCT_PROSE)
         self.assertIn("الرسم", clean_prose(line))
 

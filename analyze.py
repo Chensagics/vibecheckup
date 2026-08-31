@@ -32,10 +32,11 @@ from build_dashboard import (_leaks as looks_harvested,  # noqa: E402
 from wcstats.clean import (BRANCH_MODES, LABEL_PLACEHOLDER,  # noqa: E402
                            REDACT_HELP, build_redaction, format_redaction,
                            install_redactor, prose_text)
-from wcstats.facets import Facets, error_signature, RE_EXT, SHELL_SUBCMD  # noqa: E402
-from wcstats.score import top_n, trends  # noqa: E402
+from wcstats.facets import (Facets, capped, error_signature,  # noqa: E402
+                           RE_EXT, SHELL_SUBCMD)
+from wcstats.score import log_odds, top_n, trends  # noqa: E402
 from wcstats.spend import Spend, local_date  # noqa: E402
-from wcstats.tokenize import (phrase_candidates, shingle_key,  # noqa: E402
+from wcstats.tokenize import (discourse_ngrams, phrase_candidates, shingle_key,  # noqa: E402
                               tokens)
 from wcstats.wrapped import Wrapped, build as build_wrapped  # noqa: E402
 
@@ -388,6 +389,10 @@ def main():
     month_user = defaultdict(Counter)
     spend = Spend()
     wrapped = Wrapped()
+    wrapped_seen = set()
+    # Discourse n-grams per side, for the model's-voice slide. The PMI
+    # phrase pool is content bigrams only and cannot hold "let me check".
+    voice_grams = {"assistant": Counter(), "user": Counter()}
     bad = 0
     total = 0
 
@@ -498,9 +503,27 @@ def main():
 
             is_prompt = role == "user" and kind == "prompt"
             if is_prompt:
+                # The same near-duplicate key the clouds use, computed here so
+                # the wrapped counters can honour it too. Without it an
+                # automation prompt fired once per repo -- "perform the
+                # analysis based on gemini.md and save to md" -- reads as a
+                # phrase used across fourteen projects, and wins the signature
+                # slide outright. It is one prompt, sent fourteen times.
+                dup_key = shingle_key(ev.get("text") or "")
+                repeat = bool(dup_key) and dup_key in wrapped_seen
+                if dup_key:
+                    wrapped_seen.add(dup_key)
                 # Cleaned prose, before stopword removal: a prompt that is
                 # only "thanks!" survives here but tokenizes to nothing.
-                wrapped.add_user_prose(tool, text, day)
+                # Same cleaned prose the clouds see, but over a pool that
+                # keeps function words: a habit is made of the words the
+                # tokenizer's stopword list exists to throw away.
+                grams = () if repeat else discourse_ngrams(text)
+                wrapped.add_user_prose(
+                    tool, text, day, project=project, prompt_id=sid,
+                    grams=grams)
+                if grams:
+                    voice_grams["user"].update(capped(grams))
                 # Activity is a fact about the clock, not about what survived
                 # the stopword list: a prompt that tokenizes to nothing still
                 # happened, and in a script we cannot segment that is every
@@ -519,11 +542,17 @@ def main():
             phrases = phrase_candidates(text)
 
             if is_prompt:
-                key = shingle_key(ev.get("text") or "")
+                key = dup_key
                 for b in slices:
                     b.add_prompt(toks, phrases, key)
                 month_user[month].update(toks)
-            elif role == "assistant":
+            elif role == "assistant" and kind == "reply":
+                voice_grams["assistant"].update(capped(discourse_ngrams(text)))
+                # Replies only. Thinking is 43% of the model's prose and it
+                # does not sound like the model talking to you -- it reads
+                # "focusing", "prioritizing", "emphasizing specific", and it
+                # was drowning the actual reply voice in the cloud the
+                # dashboard has always labelled "Assistant replies".
                 for b in slices:
                     b.add_assistant(toks, phrases)
 
@@ -542,6 +571,15 @@ def main():
               "wrapped counts are unaffected.", file=sys.stderr)
 
     bg_user, bg_asst = g.prose_user, g.prose_asst
+    # Background for the model's voice: everything either side said, so the
+    # log-odds asks "distinctive against this conversation", not against itself.
+    voice_bg = Counter(g.prose_asst)
+    voice_bg.update(g.prose_user)
+    assistant_voice = log_odds(g.prose_asst, voice_bg, n=40)
+    gram_bg = Counter(voice_grams["assistant"])
+    gram_bg.update(voice_grams["user"])
+    assistant_voice_phrases = log_odds(voice_grams["assistant"], gram_bg,
+                                       n=20, min_count=8)
     months = sorted(m for m in F.keys("month") if m != "unknown")
 
     # Keep the payload small: only the busiest projects get their own cloud.
@@ -558,6 +596,13 @@ def main():
         "sessions": len(session_events),
         "top_words": global_cloud["prose_user"],
         "top_phrases": global_cloud["phrases_user"],
+        # Not raw frequency. Both sides of a coding session say "file" and
+        # "run" constantly, so a frequency list of the model's words is a
+        # frequency list of the user's with the names changed. What makes the
+        # slide worth reading is the *difference*: scored against the owner's
+        # own vocabulary, what comes back is the register only the model uses.
+        "assistant_top_words": assistant_voice,
+        "assistant_top_phrases": assistant_voice_phrases,
         "rising": trend["rising"],
         "hour_histogram": hour_hist,
         "weekday_histogram": weekday_hist,

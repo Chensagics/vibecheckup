@@ -282,6 +282,40 @@ def error_signature(text: str, exit_code=None) -> str:
     return line[:110]
 
 
+# --- how much one message may say -------------------------------------------
+#
+# Deduplication answers "the same prompt fired 400 times"; it has no answer for
+# "one message said the same word 400 times". A single pasted translation table
+# put its Arabic UI copy at rank 10 of the owner's most-used words, ahead of
+# `data` and `files`, and ten such messages were a third of the whole corpus.
+# He had typed none of it.
+#
+# clean.py now recognises that particular paste, but the general problem is not
+# a missing pattern -- it is that the cloud is a raw sum, so any leak class the
+# cleaner has not learned yet can still buy the headline outright.
+#
+# So a term counts once per message, however often that message repeats it.
+# "Most used" becomes "used in the most separate prompts", which is both the
+# more truthful reading of the question and structurally immune to the whole
+# class of bug: no single document can ever outvote another, whatever it holds
+# and whatever the cleaner failed to notice about it.
+#
+# prose_user_raw is deliberately left uncapped -- it is the "show me the
+# unfiltered counts" toggle, and a filtered raw count would be a lie.
+MAX_TERM_PER_DOC = 1
+
+
+def capped(items, cap=MAX_TERM_PER_DOC):
+    """One document's contribution, with no term counted more than `cap`."""
+    c = Counter(items)
+    if cap is None:
+        return c
+    for term, n in c.items():
+        if n > cap:
+            c[term] = cap
+    return c
+
+
 class Bucket:
     """Counters for one facet slice."""
 
@@ -315,13 +349,13 @@ class Bucket:
             return
         if dup_key:
             self.seen_prompts.add(dup_key)
-        self.prose_user.update(toks)
-        self.phrases_user.update(phrases)
+        self.prose_user.update(capped(toks))
+        self.phrases_user.update(capped(phrases))
 
     def add_assistant(self, toks, phrases):
         self.words += len(toks)
-        self.prose_asst.update(toks)
-        self.phrases_asst.update(phrases)
+        self.prose_asst.update(capped(toks))
+        self.phrases_asst.update(capped(phrases))
 
     def render(self, bg_user, bg_asst, n=300, distinctive=True):
         out = {

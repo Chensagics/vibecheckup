@@ -229,6 +229,13 @@ footer{margin-top:44px;padding-top:18px;border-top:1px solid var(--rule);
 .wr-slide{position:absolute;inset:0;display:none;flex-direction:column;
   align-items:center;justify-content:center;gap:14px;text-align:center;
   padding:38px 26px 30px}
+.wr-feelings{display:flex;flex-wrap:wrap;justify-content:center;
+  gap:10px 18px;margin:6px 0 2px}
+.wr-feel{display:flex;flex-direction:column;align-items:center;min-width:88px}
+.wr-feel-e{font-size:clamp(24px,4.4vw,34px);line-height:1.15}
+.wr-feel b{font-size:clamp(21px,3.8vw,32px);font-weight:650;letter-spacing:-.02em}
+.wr-feel i{font-style:normal;font-size:clamp(10px,1.5vw,12px);opacity:.62;
+  text-transform:uppercase;letter-spacing:.08em;margin-top:2px}
 .wr-slide.on{display:flex;animation:wr-in .42s cubic-bezier(.22,.68,.24,1) both}
 @keyframes wr-in{from{opacity:0;transform:translateY(18px)}}
 .wr-kicker{font-family:var(--mono);font-size:11px;letter-spacing:.16em;
@@ -1289,6 +1296,33 @@ function wrHourVibe(h){
   if (h < 21) return ['🌆','Evening operator — the best ideas land after the meetings stop.'];
   return ['🌙','Late shift. The day ends when the build passes, not when the clock says so.'];
 }
+/* The families that are not manners, in the order wcstats/wrapped.py lists
+   them. Names and emoji live here; the counting lives in Python. */
+const FEELINGS = ['profanity','frustration','praise','urgency','confusion'];
+const FEEL_LABEL = {profanity:'Swearing', frustration:'Exasperation',
+                    praise:'Praise', urgency:'Urgency', confusion:'Confusion'};
+const FEEL_EMOJI = {profanity:'🤬', frustration:'😤', praise:'🙌',
+                    urgency:'🔥', confusion:'🫠'};
+
+function wrFeelVerdict(e){
+  const n = f => wrNum(e[f]);
+  const top = FEELINGS.slice().sort((a,b) => n(b) - n(a))[0];
+  const swear = n('profanity'), praise = n('praise'), frus = n('frustration');
+  if (swear > praise && swear > 0)
+    return 'You swore at it more often than you praised it. It kept working anyway.';
+  if (praise > 0 && swear === 0 && frus === 0)
+    return 'A whole year and never once did you lose your temper. Suspicious.';
+  if (top === 'urgency')
+    return 'Mostly urgency. Everything was needed right now, all year.';
+  if (top === 'frustration')
+    return 'Mostly exasperation — the sound of asking twice.';
+  if (top === 'praise')
+    return 'Mostly praise. You are nicer to a language model than most people are to each other.';
+  if (top === 'confusion')
+    return 'Mostly confusion. At least you said so out loud.';
+  return 'A working relationship, with feelings.';
+}
+
 function wrPoliteVerdict(p, prompts){
   const please = wrNum(p.please), thanks = wrNum(p.thanks), sorry = wrNum(p.sorry);
   if (sorry > thanks && sorry > 0)
@@ -1363,6 +1397,12 @@ function wrBuild(){
   const busiest = w.busiest_day || {};
   const pol = w.politeness || {};
   const polTotal = wrNum(pol.please) + wrNum(pol.thanks) + wrNum(pol.sorry);
+  const emo = w.emotions || {};
+  const feelTotal = FEELINGS.reduce((n,f) => n + wrNum(emo[f]), 0);
+  const aw = (w.assistant_top_words || []).map(d => Array.isArray(d)
+    ? {t:String(d[0]), n:wrNum(d[1])} : {t:String(d.t), n:wrNum(d.n)})
+    .filter(d => d.t);
+  const ap = w.assistant_top_phrase || '';
   const tt = w.top_tool || {};
   const tools = wrNum(w.tools_used);
   const tw = wrWords();
@@ -1407,7 +1447,9 @@ function wrBuild(){
       });
       parts.push(row);
     }
-    parts.push(wrSb(`It came up <b>${fmt(tw[0].n)}</b> times, and that is after the boilerplate was stripped out.`));
+    /* Counts are per-prompt now -- a word counts once per message however
+       often that message repeats it -- so "N times" would be a lie. */
+    parts.push(wrSb(`You reached for it in <b>${fmt(tw[0].n)}</b> separate prompts, and that is after the boilerplate was stripped out.`));
     out.push(wrS('top-words', parts));
   }
 
@@ -1415,6 +1457,34 @@ function wrBuild(){
     wrK('Your signature phrase'),
     wrBg('“' + String(w.top_phrase) + '”'),
     wrSb('It came up in your prompts often enough that it stopped being a phrase and became a tell.')
+  ]));
+
+  /* The model's half of the year. Computed since the first version and shown
+     only in the Lexicon tab, so it never reached the card anyone shares. */
+  if (aw.length){
+    const parts = [wrK('What it said back'), wrBg(aw[0].t)];
+    if (aw.length > 1){
+      const row = el('div','wr-words');
+      const size = ['clamp(23px,4.6vw,46px)','clamp(21px,4vw,39px)',
+                    'clamp(19px,3.4vw,33px)','clamp(18px,3vw,29px)'];
+      const col = ['--s2','--s3','--s4','--s5'];
+      aw.slice(1,5).forEach((d,i) => {
+        const sp = el('span', null, esc(d.t));
+        sp.style.fontSize = size[i]; sp.style.color = cssv(col[i]);
+        row.appendChild(sp);
+      });
+      parts.push(row);
+    }
+    parts.push(wrSb('Not the words it used most — both of you say “file” all day. ' +
+                    'These are the ones <b>it</b> reaches for and you do not.'));
+    out.push(wrS('assistant-words', parts));
+  }
+
+  if (ap) out.push(wrS('assistant-phrase', [
+    wrK('Its favourite thing to say'),
+    wrBg('“' + String(ap) + '”'),
+    wrSb('Every long-running conversation develops a tic. That one is the ' +
+         'model&rsquo;s, not yours.')
   ]));
 
   if (hasHour || w.peak_weekday){
@@ -1452,6 +1522,25 @@ function wrBuild(){
             [fmt(pol.sorry||0),'Sorry']]),
     wrSb(esc(wrPoliteVerdict(pol, prompts)))
   ]));
+
+  /* Manners were the whole of this section once, and readers said so: a year
+     of talking to a machine is not three counts of "please". */
+  if (feelTotal > 0){
+    const rows = FEELINGS.filter(f => wrNum(emo[f]) > 0)
+                         .sort((a,b) => wrNum(emo[b]) - wrNum(emo[a]));
+    const grid = el('div','wr-feelings');
+    rows.forEach(f => {
+      const r = el('div','wr-feel');
+      r.innerHTML = `<span class="wr-feel-e">${FEEL_EMOJI[f]}</span>` +
+                    `<b>${fmt(emo[f])}</b><i>${FEEL_LABEL[f]}</i>`;
+      grid.appendChild(r);
+    });
+    out.push(wrS('feelings', [
+      wrK('How you actually felt about it'),
+      grid,
+      wrSb(esc(wrFeelVerdict(emo)))
+    ]));
+  }
 
   if (tt.name) out.push(wrS('tool', [
     wrK('Your ride-or-die'),

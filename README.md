@@ -29,9 +29,11 @@ install, nothing on your PATH; `python3` is the only requirement.
 ### ✨ Agent Wrapped — the landing view
 
 A full-screen slide sequence, Spotify-Wrapped style: how many words you sent to
-an AI this year, how many prompts and sessions, your top words and top phrase,
-your peak hour and weekday, your longest streak and busiest day, how often you
-said *please*, which tool you actually live in, what it would have cost. It ends
+an AI this year, how many prompts and sessions, your top words and your signature
+phrase, your peak hour and weekday, your longest streak and busiest day, how
+you actually felt about it — praise, exasperation, urgency, swearing, not just
+*please* — the words the **model** reaches for that you never do, which tool
+you actually live in, what it would have cost. It ends
 on a share card drawn to a `<canvas>` with a **Download PNG** button — branded
 `VIBECHECKUP ⚡ AGENT WRAPPED 2026`, with **no directory names and no file
 paths — but the words come out of your prompts**, so read them before posting. Tap any word on the card to drop it and the next one moves
@@ -255,9 +257,11 @@ making those choices with the facts in front of you.
   the slides carry more than the card does: your spend total and the date of
   your priciest day, the date of your busiest day, your peak hour and weekday,
   and how many times *please*, *thanks* and *sorry* appeared in your prompts.
-- Politeness counters and every word cloud run over *cleaned* prose, so a
+- Emotion counters and every word cloud run over *cleaned* prose, so a
   "please" injected by a hook or a skill definition is filtered out before it
-  can be counted.
+  can be counted. Tone and habit are read only from prompts short enough that a
+  person plausibly typed them: a 3,000-word pasted brief counts toward how much
+  you sent, never toward how you sound.
 - **A prompt is whatever arrived in your turn.** That is what the tool can
   honestly claim, and the copy is written to claim exactly that and no more.
   Typing, pasting a stack trace, and a skill definition the harness folded into
@@ -332,7 +336,11 @@ under it is a schema.
 
 Scoring goes past raw counts:
 
-- **Frequency** for the headline cloud.
+- **Frequency, counted once per prompt.** A term counts once per message
+  however often that message repeats it, so "most used" means "used in the most
+  separate prompts". This is what stops one paste buying the headline: a
+  translation table that said `السعر` 120 times had put it tenth in a human
+  being's most-used words.
 - **Log-odds with an informative Dirichlet prior** for every comparison facet.
   Raw counts make each tool and project look identical; this surfaces what is
   *distinctive* about one against the whole corpus.
@@ -344,7 +352,22 @@ Scoring goes past raw counts:
 - **Month-over-month rate deltas** for rising and fading terms.
 
 Near-identical automation prompts are clustered by shingle key and counted once
-by default, with raw counts available via a toggle.
+by default, with raw counts available via a toggle. The same key gates the
+wrapped counters, so an automation prompt fired once per repo cannot pass for a
+phrase used across fourteen projects.
+
+**The signature phrase is picked on breadth, not volume.** A topic is dense
+inside one codebase; a habit turns up wherever you are working, so candidates
+rank on how many distinct projects use them and only then on how often. That
+pool keeps function words — a habit is made of the words the stopword list
+exists to throw away, and a content-word pool can only ever hand you a domain
+noun pair.
+
+**The model's voice is scored against yours.** Both sides of a coding session
+say "file" and "run" constantly, so a frequency list of the model's words is
+your own list with the names changed. The Wrapped shows log-odds instead: the
+register only it uses. Its thinking is excluded — 43% of its prose, and it does
+not sound like anything it said to you.
 
 **`wcstats/spend.py`** prices the usage the adapters extracted, per component.
 Adapters normalise `input` to be cache-exclusive, so the buckets are disjoint

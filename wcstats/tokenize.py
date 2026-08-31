@@ -363,3 +363,58 @@ def cluster_prompts(texts):
         if len(t) > len(g[1]):
             g[1] = t
     return [(rep, n) for n, rep in groups.values()]
+
+
+# --- discourse n-grams: the pool a signature phrase can come from ------------
+#
+# phrase_candidates() runs on keep(), which drops every stopword. That is right
+# for a word cloud and fatal for a *habit*: "make sure", "one more thing" and
+# "let me know" are made almost entirely of the words keep() throws away, so
+# the only phrases that could ever reach the Wrapped were domain noun pairs.
+# The card called "day trading" a signature phrase because a content-word pool
+# has nothing else to offer.
+#
+# This pool keeps function words and removes only pure glue -- an n-gram whose
+# every word is a BASE_STOP article, preposition, pronoun or auxiliary ("of
+# the", "in the"), or one that merely starts or ends on such a word ("read
+# the", "you read"), which is a fragment rather than a phrase.
+
+NGRAM_SIZES = (2, 3)
+
+# This pool deliberately skips keep(), because keep() drops the stopwords a
+# habit is built from -- and keep() is also where the identity guards live.
+# Dropping it wholesale published `izs.me grok.com` and `mail about izs.me` as
+# things the model characteristically says: a third party's mail domain, on
+# the card, from a corpus that had been scrubbed everywhere else.
+#
+# So the guards come back, in the only form a discourse phrase needs: a word
+# in one is letters, with an internal apostrophe or hyphen at most. That is
+# strictly narrower than keep()'s identity rules -- no dots, no @, nothing
+# that could carry a host, an address, a filename or a version -- while
+# leaving every function word intact.
+RE_WORD_LIKE = re.compile(r"^[^\W\d_](?:[\w'’\-]{0,26}[^\W\d_])?$", re.U)
+
+
+def _word_like(tok: str) -> bool:
+    return bool(tok) and len(tok) <= 28 and bool(RE_WORD_LIKE.match(tok))
+
+
+def discourse_ngrams(text: str, sizes=NGRAM_SIZES):
+    """Word n-grams over cleaned prose, function words included."""
+    if not text:
+        return []
+    words = [w.lower().strip("-.'")
+             for w in RE_TOKEN.findall(_fold(text))]
+    words = [w for w in words if w]
+    out = []
+    for n in sizes:
+        for i in range(len(words) - n + 1):
+            gram = words[i:i + n]
+            if gram[0] in BASE_STOP or gram[-1] in BASE_STOP:
+                continue
+            if all(w in BASE_STOP for w in gram):
+                continue
+            if not all(_word_like(w) for w in gram):
+                continue
+            out.append(" ".join(gram))
+    return out
