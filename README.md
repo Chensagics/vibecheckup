@@ -24,6 +24,57 @@ install, nothing on your PATH; `python3` is the only requirement.
 
 ---
 
+## Start here
+
+You need **`python3` 3.9+ on macOS or Linux**. That is the whole list — no pip,
+no packages, nothing added to your PATH. (On Windows, run it under WSL or Git
+Bash. On a bare Mac, `xcode-select --install`.)
+
+**Clone it and run it:**
+
+```bash
+git clone https://github.com/chensagics/vibecheckup.git
+cd vibecheckup
+./vibecheckup.sh
+```
+
+**Or hand it to the agent you already have open** — it will read the docs, tell
+you in its own words what the tool touches, and set it up once you agree:
+
+```text
+Read https://github.com/chensagics/vibecheckup. Before running anything, tell me
+in your own words what vibecheckup does, what it reads, and where my data goes,
+then ask if I want to proceed. If I say yes, install and run it, then open the
+dashboard.
+```
+
+Either way, one run reads the AI-session logs already on this machine, writes a
+single self-contained `dashboard.html` beside the script, and opens it in your
+browser. It takes well under a minute, it uploads nothing, and re-running just
+refreshes — there is no cache to go stale.
+
+**Want to look before pointing it at your own logs?**
+
+```bash
+./vibecheckup.sh --demo     # same dashboard, synthetic corpus, real logs untouched
+```
+
+**Planning to send it to someone?** The dashboard holds your project names,
+your shell commands and the raw error text your tools hit. Build the redacted
+copy instead — and read [Privacy](#privacy) before you post anything:
+
+```bash
+./vibecheckup.sh --scrub    # also writes dashboard-shareable.html, and opens that
+```
+
+**Nothing found?** It reads Claude Code, Codex, Grok CLI, Gemini CLI and
+Antigravity; any it cannot find are skipped and named in the run report. The
+exact paths are in [Sources](#sources).
+
+→ [What you get](#three-faces-of-one-file) · [Other ways to run it](#other-ways-to-run-it) · [Where your data goes](#privacy)
+
+---
+
 ## Three faces of one file
 
 ### ✨ Agent Wrapped — the landing view
@@ -61,37 +112,19 @@ usage at all and are badged **no usage data** instead of being counted as zero.
      real vocabulary. -->
 <img src="assets/dashboard.png" alt="vibecheckup — the Overview tab: coverage by tool and the headline word cloud" width="860">
 
-## Run it
+## Other ways to run it
 
-You already have an agent open. Give it this and it will do the rest — read the
-docs, tell you what the tool touches, and set it up once you agree:
+[Start here](#start-here) covers the two normal paths. This section is the rest:
+asking your agent for a verdict, installing without a clone, pinning a release,
+and every flag.
 
-```text
-Read https://github.com/chensagics/vibecheckup. Before running anything, tell me
-in your own words what vibecheckup does, what it reads, and where my data goes,
-then ask if I want to proceed. If I say yes, install and run it, then open the
-dashboard.
-```
-
-Works in Claude Code, Codex, Gemini CLI, or anything else that can read a repo
-and run a script. Add *"then read the stats it generates and tell me what a year
-of my prompts says about me"* if you want its verdict — but know what that hands
+**Asking the agent what it found.** The prompt above stops at opening the
+dashboard. Add *"then read the stats it generates and tell me what a year of my
+prompts says about me"* if you want its read on you — but know what that hands
 over: your `stats.json` is your vocabulary, your project names, and the raw
 error text your tools hit, and an agent pointed at the rest of `data/` sees
 `vocab.json` and `redact.json` too. The local run uploads nothing; that last
 step is the exception, and the dashboard answers the same questions without it.
-
-### Or run it yourself
-
-**From a clone.** Nothing lands outside the directory you pick:
-
-```bash
-git clone https://github.com/chensagics/vibecheckup.git
-cd vibecheckup
-./vibecheckup.sh            # ingest -> analyze -> build -> open dashboard.html
-./vibecheckup.sh --demo     # a synthetic corpus instead: no real logs needed
-./vibecheckup.sh --scrub    # also build a shareable copy — see Privacy
-```
 
 **Or one line**, if you would rather not clone. No pip, no dependencies — it
 unpacks this repo into `~/.vibecheckup` and runs from there. That directory is
@@ -115,9 +148,6 @@ sh vibecheckup.sh
 If you fork or rename, override the source with `VIBECHECKUP_REPO=owner/name`
 (and `VIBECHECKUP_BRANCH=tag` to pin what the bootstrap fetches).
 
-Re-run any time to refresh; there is no cache to go stale. A full run re-reads
-everything — a few thousand files in well under a minute.
-
 | Flag | Effect |
 |---|---|
 | `--demo` | Build from a deterministic synthetic corpus (`samples/generate.py`). Never touches your real logs. |
@@ -140,12 +170,12 @@ python3 build_dashboard.py         # stats + template  -> dashboard.html
 python3 build_dashboard.py --scrub # ... and dashboard-shareable.html
 ```
 
-Python 3.9+, standard library only. `python3` is the single requirement; on a
-bare Mac the script points you at `xcode-select --install`.
+Standard library only, so those three run anywhere `python3` does — a full pass
+re-reads a few thousand files in well under a minute.
 
-**Platforms:** macOS and Linux. On Windows, run it under WSL or Git Bash — the
-wrapper is a POSIX shell script, and the log locations it reads are the ones
-your tools write inside that environment.
+The wrapper is a POSIX shell script, which is why Windows goes through WSL or
+Git Bash: the log paths it reads are the ones your tools write *inside* that
+environment.
 
 ## Privacy
 
