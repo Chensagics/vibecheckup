@@ -26,20 +26,7 @@ install, nothing on your PATH; `python3` is the only requirement.
 
 ## Start here
 
-You need **`python3` 3.9+ on macOS or Linux**. That is the whole list — no pip,
-no packages, nothing added to your PATH. (On Windows, run it under WSL or Git
-Bash. On a bare Mac, `xcode-select --install`.)
-
-**Clone it and run it:**
-
-```bash
-git clone https://github.com/chensagics/vibecheckup.git
-cd vibecheckup
-./vibecheckup.sh
-```
-
-**Or hand it to the agent you already have open** — it will read the docs, tell
-you in its own words what the tool touches, and set it up once you agree:
+**Copy this to your agent:**
 
 ```text
 Read https://github.com/chensagics/vibecheckup. Before running anything, tell me
@@ -47,6 +34,22 @@ in your own words what vibecheckup does, what it reads, and where my data goes,
 then ask if I want to proceed. If I say yes, install and run it, then open the
 dashboard.
 ```
+
+It reads the docs, tells you in its own words what the tool touches, and sets it
+up once you agree. Works in Claude Code, Codex, Gemini CLI, or anything else
+that can read a repo and run a script.
+
+**Or run it yourself.** `python3` 3.9+ on macOS or Linux is the whole
+requirement — no pip, no packages, nothing added to your PATH:
+
+```bash
+git clone https://github.com/chensagics/vibecheckup.git
+cd vibecheckup
+./vibecheckup.sh
+```
+
+(On Windows, run it under WSL or Git Bash. On a bare Mac, the script points you
+at `xcode-select --install`.)
 
 Either way, one run reads the AI-session logs already on this machine, writes a
 single self-contained `dashboard.html` beside the script, and opens it in your
