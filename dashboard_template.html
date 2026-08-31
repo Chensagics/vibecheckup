@@ -342,8 +342,9 @@ footer{margin-top:44px;padding-top:18px;border-top:1px solid var(--rule);
   <p class="eyebrow" id="eyebrow">—</p>
   <h1>vibecheckup<br><em>what I actually asked for</em></h1>
   <p class="lede">Every local AI coding session on this machine, read end to end and
-    reduced to the words that were really typed — with the machine's own boilerplate
-    stripped out, so the clouds show vocabulary rather than scaffolding.</p>
+    reduced to the words that went to the model in your name — with the machine's own
+    boilerplate, code and config stripped out, so the clouds show vocabulary rather
+    than scaffolding.</p>
   <div class="stat-row" id="stats"></div>
 
   <section class="rail">
@@ -881,7 +882,7 @@ function renderActivity(){
 
   const c4 = el('div','card');
   c4.appendChild(el('h3',null,'Busiest projects'));
-  c4.appendChild(el('p','sub','By prompts typed. The table carries the exact numbers.'));
+  c4.appendChild(el('p','sub','By prompts sent. The table carries the exact numbers.'));
   const tw = el('div','tablewrap');
   const tb = el('table');
   tb.innerHTML = '<thead><tr><th>Project</th><th>Prompts</th><th>Sessions</th>'+
@@ -1375,12 +1376,12 @@ function wrBuild(){
     wrK('Vibecheckup ⚡ Agent Wrapped'),
     wrBg('Your AI year'),
     win.start ? wrMd(`${wrDate(win.start)} → ${wrDate(win.end)}`) : null,
-    wrSb('Everything you typed to an AI on this machine, read back to you.'),
+    wrSb('Everything you sent to an AI on this machine, read back to you.'),
     wrFn('Click, tap, or press → to move through it.')
   ]));
 
   if (words > 0) out.push(wrS('words', [
-    wrK('Words typed to AI'),
+    wrK('Words sent to AI'),
     wrBg(fmt(words)),
     wrSb(esc(wrScale(words)))
   ]));
@@ -1393,7 +1394,7 @@ function wrBuild(){
   ]));
 
   if (tw.length){
-    const parts = [wrK('Most-typed words'), wrBg(tw[0].t)];
+    const parts = [wrK('Your most-used words'), wrBg(tw[0].t)];
     if (tw.length > 1){
       const row = el('div','wr-words');
       const size = ['clamp(23px,4.6vw,46px)','clamp(21px,4vw,39px)',
@@ -1406,14 +1407,14 @@ function wrBuild(){
       });
       parts.push(row);
     }
-    parts.push(wrSb(`Said <b>${fmt(tw[0].n)}</b> times, and that is after the boilerplate was stripped out.`));
+    parts.push(wrSb(`It came up <b>${fmt(tw[0].n)}</b> times, and that is after the boilerplate was stripped out.`));
     out.push(wrS('top-words', parts));
   }
 
   if (w.top_phrase) out.push(wrS('phrase', [
     wrK('Your signature phrase'),
     wrBg('“' + String(w.top_phrase) + '”'),
-    wrSb('You typed it often enough that it stopped being a phrase and became a tell.')
+    wrSb('It came up in your prompts often enough that it stopped being a phrase and became a tell.')
   ]));
 
   if (hasHour || w.peak_weekday){
@@ -1474,7 +1475,7 @@ function wrBuild(){
   if (w.rising_word) out.push(wrS('rising', [
     wrK('On the rise'),
     wrBg(String(w.rising_word)),
-    wrSb('Barely in your vocabulary when the window opened. Now it is everywhere.')
+    wrSb('Barely in your prompts when the window opened. Now it is everywhere.')
   ]));
 
   out.push(wrCardSlide());
@@ -1504,16 +1505,16 @@ function wrCardSlide(){
   btn.addEventListener('click', wrDownload);
   box.appendChild(btn);
   box.appendChild(wrFn('1080 × 1350, drawn in this page — nothing is uploaded. ' +
-    'No project names, no paths — but the words are your own prompts. ' +
-    'Read them before you post.'));
+    'No project names, no paths — but the words come out of your own prompts, ' +
+    'anything you pasted into them included. Read them before you post.'));
   return wrS('card', [box]);
 }
 
 function wrCardLabel(){
   const w = S.wrapped || {}, tw = wrCardWords();
-  return `Agent Wrapped share card: ${fmt(w.words_to_ai)} words typed to AI, ` +
+  return `Agent Wrapped share card: ${fmt(w.words_to_ai)} words sent to AI, ` +
     `${fmt(w.prompts)} prompts` +
-    (tw.length ? `, most-typed word "${tw[0].t}"` : '') + '.';
+    (tw.length ? `, most-used word "${tw[0].t}"` : '') + '.';
 }
 
 /* One chip per word the card is currently showing, plus the ones dropped so
@@ -1679,13 +1680,13 @@ function wrDrawCard(cv){
   };
 
   if (words > 0) blocks.push({h:236, draw:y => {
-    label('WORDS TYPED TO AI', y+18);
+    label('WORDS SENT TO AI', y+18);
     T(fmt(words), {x:PAD, y:y+216, size:toWidth(fmt(words), 800, 248), weight:800,
                    track:-.045, color:ink, max:COL});
   }});
 
   if (tw.length) blocks.push({h: tw.length > 1 ? 250 : 172, draw:y => {
-    label('MOST-TYPED WORDS', y+18);
+    label('MOST-USED WORDS', y+18);
     const r = T(tw[0].t, {x:PAD, y:y+140, size:toWidth(tw[0].t, 800, 148),
                           weight:800, track:-.04, color:ink, max:COL});
     // Under a descender ("python") a fixed offset would strike the glyph.

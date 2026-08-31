@@ -16,14 +16,16 @@ from adapters import antigravity, claude_code, codex, gemini_cli, grok  # noqa: 
 from adapters.base import argv_head, decode_dash_path, iso, usage  # noqa: E402
 from adapters.protoscan import extract_strings  # noqa: E402
 from analyze import SCHEMA_VERSION  # noqa: E402
-from wcstats.clean import (clean_prose, is_injected, looks_like_code,  # noqa: E402
-                           prose_text)
+from wcstats.clean import (STRUCT_AMBIGUOUS, STRUCT_GLUE,  # noqa: E402
+                           STRUCT_PROSE, STRUCT_STRONG, clean_prose,
+                           drop_structured_lines, is_injected, looks_like_code,
+                           prose_text, struct_class)
 from wcstats.facets import error_signature  # noqa: E402
 from wcstats.score import log_odds, pmi_phrases, trends  # noqa: E402
 from wcstats.spend import (Spend, event_cost, load_prices,  # noqa: E402
                            match_price)
 from wcstats.tokenize import (cluster_prompts, phrase_candidates,  # noqa: E402
-                              raw_tokens, shingle_key, tokens)
+                              shingle_key, tokens)
 from wcstats.wrapped import Wrapped, longest_streak  # noqa: E402
 
 
@@ -346,6 +348,165 @@ class TestClean(unittest.TestCase):
         self.assertNotIn("42", out)
 
 
+SCHEMA_BLOB = '''{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "type": "object",
+  "description": "JSON Schema reference for Claude Code settings",
+  "properties": {
+    "apiKeyHelper": {
+      "description": "Path to a script that outputs authentication values",
+      "type": "string"
+    },
+    "verbose": { "type": "boolean" }
+  },
+  "required": ["apiKeyHelper"]
+}'''
+
+
+class TestStructuredData(unittest.TestCase):
+    """JSON / YAML / TOML must not become vocabulary.
+
+    The bug this class exists for: a settings schema pasted into a prompt is
+    not fenced, is not markup, and arrives INSIDE a user turn, so neither
+    looks_like_code() nor the role gate could see it. The shipped card told the
+    owner his signature phrase was "type string" -- 435 occurrences of
+    `"type": "string"`.
+    """
+
+    def test_quoted_key_line_is_decisive(self):
+        for line in ('"type": "string",', "  '$schema': 'x'",
+                     '{"winner": "A|B|tie"},', '"apiKeyHelper": {'):
+            self.assertEqual(struct_class(line), STRUCT_STRONG, line)
+
+    def test_sentence_key_is_not_a_json_key(self):
+        """The owner's Arabic vocabulary lives in translation files whose keys
+        are whole English sentences. A rule that took any quoted key would eat
+        the most unmistakably-his thing on the card."""
+        line = '"When the chart turns red": "عندما يتحول الرسم البياني",'
+        self.assertEqual(struct_class(line), STRUCT_PROSE)
+        self.assertIn("الرسم", clean_prose(line))
+
+    def test_labelled_sentence_is_ambiguous_not_glue(self):
+        for line in ("Note: read this first", "Deliverable: add ONE action",
+                     "IMPORTANT: do not trigger alerts", "Examples:"):
+            self.assertEqual(struct_class(line), STRUCT_AMBIGUOUS, line)
+
+    def test_scalar_assignment_is_glue(self):
+        for line in ("line-length = 88", "name: update-config",
+                     'target-version = "py39"', '"acceptEdits",', "}", "---"):
+            self.assertEqual(struct_class(line), STRUCT_GLUE, line)
+
+    def test_prose_then_pasted_schema_keeps_the_prose(self):
+        """The exact shape the corpus has: a real typed question, then a blob.
+        Dropping the message would drop the question."""
+        got = clean_prose("Have a look at the settings loader and tell me why "
+                          "it hangs.\n\n" + SCHEMA_BLOB +
+                          "\n\nThen write the migration note.")
+        self.assertIn("settings loader", got)
+        self.assertIn("migration note", got)
+        for gone in ("apiKeyHelper", "boolean", "JSON Schema reference"):
+            self.assertNotIn(gone, got, gone)
+
+    def test_the_signature_phrase_bug_itself(self):
+        """`type string` came from `"type": "string"` 435 times."""
+        self.assertNotIn("type string", phrase_candidates(clean_prose(SCHEMA_BLOB)))
+        self.assertEqual(tokens(clean_prose(SCHEMA_BLOB)), [])
+
+    def test_ordinary_colon_in_prose_survives(self):
+        got = clean_prose("Note: read this first. The problem: it hangs on "
+                          "startup, and the fix: restart the worker.")
+        self.assertIn("Note: read this first", got)
+        self.assertIn("The problem: it hangs", got)
+
+    def test_the_owners_labelled_run_survives(self):
+        """Runs of `Key: value` in this corpus are how the owner writes, not
+        YAML: 595 tokens of "Deliverable: / TDD: / Run:" and "Fix: / METHOD: /
+        TESTS:". A bare YAML rule would have deleted exactly that."""
+        text = ("Deliverable: add ONE action to campaignStore\n"
+                "TDD: write the failing test first\n"
+                "METHOD: reproduce the leak with a small script\n"
+                "Examples:\n"
+                "TESTS: add a regression test for each fix")
+        self.assertEqual(clean_prose(text), text)
+
+    def test_a_label_at_the_edge_of_a_block_is_still_prose(self):
+        """Ambiguous filler only goes when structure stands on BOTH sides of
+        it: where prose meets config, the prose wins."""
+        above = clean_prose('Note: read this first\n"type": "string"\n}')
+        self.assertEqual(above, "Note: read this first")
+        below = clean_prose('{\n"type": "string"\n}\nIMPORTANT: check the loader')
+        self.assertEqual(below, "IMPORTANT: check the loader")
+
+    def test_frontmatter_block_goes_whole(self):
+        got = clean_prose("---\nname: update-config\n"
+                          "description: Configure the harness\n---\n\n"
+                          "Actually just tell me what the hook does.")
+        self.assertEqual(got, "Actually just tell me what the hook does.")
+
+    def test_a_horizontal_rule_mid_paragraph_is_not_frontmatter(self):
+        text = ("the first thought here\n---\nthe second thought here")
+        self.assertIn("second thought", clean_prose(text))
+
+    def test_toml_block_goes_and_the_question_stays(self):
+        got = clean_prose('[tool.black]\nline-length = 88\n'
+                          'target-version = "py39"\n\nDoes that look right?')
+        self.assertEqual(got, "Does that look right?")
+
+    def test_enum_members_go_with_their_key(self):
+        got = clean_prose('Which of these should I allow?\n'
+                          '"permissions": [\n  "acceptEdits",\n'
+                          '  "bypassPermissions",\n  "plan"\n]')
+        self.assertEqual(got, "Which of these should I allow?")
+        self.assertNotIn("acceptEdits", got)
+
+    def test_drop_structured_lines_keeps_input_order(self):
+        lines = ["first", '"k": 1', "second", "third"]
+        self.assertEqual(drop_structured_lines(lines),
+                         ["first", "second", "third"])
+
+    def test_no_structure_changes_nothing(self):
+        lines = ["a real sentence", "and another one"]
+        self.assertEqual(drop_structured_lines(lines), lines)
+
+
+class TestPhraseAdjacency(unittest.TestCase):
+    """A phrase is two words with a space between them.
+
+    phrase_candidates() used to run over a flat token list, which had thrown
+    every separator away, so a bigram formed across any gap -- including the
+    `": "` between a JSON key and its value.
+    """
+
+    def test_a_phrase_does_not_cross_a_colon(self):
+        self.assertEqual(phrase_candidates('"type": "string"'), [])
+        self.assertEqual(phrase_candidates("kind: string"), [])
+
+    def test_a_phrase_does_not_cross_a_newline(self):
+        self.assertEqual(phrase_candidates("deploy\nserver"), [])
+
+    def test_a_phrase_does_not_cross_a_comma(self):
+        self.assertEqual(phrase_candidates("fast, cheap"), [])
+
+    def test_a_real_phrase_still_forms(self):
+        self.assertIn("dev server", phrase_candidates("the dev server is up"))
+
+    def test_multiple_spaces_are_still_a_space(self):
+        self.assertEqual(phrase_candidates("dev   server"), ["dev server"])
+
+    def test_stopwords_still_break_a_pair(self):
+        self.assertNotIn("word the", phrase_candidates("word the cloud"))
+
+    def test_non_latin_phrases_survive(self):
+        self.assertEqual(phrase_candidates("الرسم البياني"),
+                         ["الرسم البياني"])
+
+    def test_offsets_track_the_folded_text(self):
+        """NFC can change the length of the string, so the gap has to be read
+        off the same text finditer walked."""
+        self.assertEqual(phrase_candidates("función rota"),
+                         ["función rota"])
+
+
 class TestTokenize(unittest.TestCase):
     def test_stopwords_removed_domain_verbs_kept(self):
         t = tokens("Please just go and fix the failing deploy test now")
@@ -358,7 +519,7 @@ class TestTokenize(unittest.TestCase):
         self.assertEqual(tokens("a b 12 x9y"), [])
 
     def test_phrases_are_content_pairs(self):
-        p = phrase_candidates(raw_tokens("build the word cloud dashboard"))
+        p = phrase_candidates("build the word cloud dashboard")
         self.assertIn("word cloud", p)
         self.assertNotIn("the word", p)
 
@@ -913,6 +1074,28 @@ class TestTemplateContract(unittest.TestCase):
         """"SPEND (EST.)" alone reads as a bill once the card is a JPEG on
         somebody else's timeline."""
         self.assertIn("list prices · not a bill", self.t)
+
+    def test_nothing_claims_the_user_typed_it(self):
+        """A prompt event is whatever arrived in the user's turn -- typed,
+        pasted, or folded in by a skill -- and the pipeline cannot tell those
+        apart. So the copy may say what appeared in the prompts and may not say
+        whose fingers put it there. This is the string the owner caught:
+        "YOUR SIGNATURE PHRASE ... You typed it often enough"."""
+        for claim in ("You typed", "you typed", "WORDS TYPED", "MOST-TYPED",
+                      "Most-typed", "words typed", "prompts typed",
+                      "really typed"):
+            self.assertNotIn(claim, self.t, claim)
+
+    def test_the_honest_replacements_are_there(self):
+        for kept in ("WORDS SENT TO AI", "MOST-USED WORDS",
+                     "It came up in your prompts often enough",
+                     "Everything you sent to an AI on this machine"):
+            self.assertIn(kept, self.t, kept)
+
+    def test_the_card_footnote_owns_up_to_pasted_text(self):
+        """The one place a plain sentence about provenance earns its keep: the
+        small print under the thing the reader is about to post."""
+        self.assertIn("anything you pasted into them included", self.t)
 
 
 if __name__ == "__main__":

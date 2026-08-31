@@ -4,9 +4,17 @@ Privacy rule, enforced here rather than in the dashboard: nothing in this
 section names a project or a path. Counts and vocabulary only -- the words are
 what the user is deliberately choosing to share, everything else is a number.
 
-The politeness counters run over *cleaned* prose (wcstats.clean), so the
-"please" in an injected skill instruction or a hook payload can never be
+The politeness counters run over *cleaned* prose (wcstats.clean), so a "please"
+in an injected skill instruction, a hook payload or a pasted config cannot be
 credited to the user.
+
+What cleaning CANNOT tell you is who put the words in the turn. A `prompt`
+event is whatever arrived in the user's turn -- typed, pasted, or injected by a
+skill or tool -- and nothing downstream of here can separate those. That is why
+every counter in this module is named for what it measures ("words to AI") and
+why the copy that renders it says *sent*, *used* and *came up* rather than
+*typed*: the numbers are true about the user's side of the conversation, and
+saying more than that would be a claim the data cannot support.
 """
 from __future__ import annotations
 
@@ -43,9 +51,9 @@ class Wrapped:
             self.prompt_days.add(day)
         if not cleaned:
             return
-        # Every word the user actually wrote, not just the content tokens --
-        # "you typed N words at a machine this year" is the headline, and
-        # dropping stopwords would quietly halve it.
+        # Every word that went to the model, not just the content tokens --
+        # "N words sent to an AI this year" is the headline, and dropping
+        # stopwords would quietly halve it.
         self.words_to_ai += len(cleaned.split())
         for name, pat in POLITENESS.items():
             n = len(pat.findall(cleaned))

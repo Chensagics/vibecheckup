@@ -35,7 +35,7 @@ from wcstats.clean import (BRANCH_MODES, LABEL_PLACEHOLDER,  # noqa: E402
 from wcstats.facets import Facets, error_signature, RE_EXT, SHELL_SUBCMD  # noqa: E402
 from wcstats.score import top_n, trends  # noqa: E402
 from wcstats.spend import Spend, local_date  # noqa: E402
-from wcstats.tokenize import (phrase_candidates, raw_tokens, shingle_key,  # noqa: E402
+from wcstats.tokenize import (phrase_candidates, shingle_key,  # noqa: E402
                               tokens)
 from wcstats.wrapped import Wrapped, build as build_wrapped  # noqa: E402
 
@@ -514,7 +514,9 @@ def main():
             toks = tokens(text)
             if not toks:
                 continue
-            phrases = phrase_candidates(raw_tokens(text))
+            # Cleaned prose, not the token list: a phrase is two words with a
+            # space between them, and only the text still knows that.
+            phrases = phrase_candidates(text)
 
             if is_prompt:
                 key = shingle_key(ev.get("text") or "")

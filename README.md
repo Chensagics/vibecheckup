@@ -28,21 +28,21 @@ install, nothing on your PATH; `python3` is the only requirement.
 
 ### ✨ Agent Wrapped — the landing view
 
-A full-screen slide sequence, Spotify-Wrapped style: how many words you typed at
+A full-screen slide sequence, Spotify-Wrapped style: how many words you sent to
 an AI this year, how many prompts and sessions, your top words and top phrase,
 your peak hour and weekday, your longest streak and busiest day, how often you
 said *please*, which tool you actually live in, what it would have cost. It ends
 on a share card drawn to a `<canvas>` with a **Download PNG** button — branded
 `VIBECHECKUP ⚡ AGENT WRAPPED 2026`, with **no directory names and no file
-paths — but the words are yours**, lifted straight from your prompts, so read
-them before posting. Tap any word on the card to drop it and the next one moves
+paths — but the words come out of your prompts**, so read them before posting. Tap any word on the card to drop it and the next one moves
 up. Slides whose stat is missing are skipped, not faked.
 
 ### Lexicon — what you actually say to an AI
 
 Word clouds over your real prompts: the headline cloud, then what is
 *distinctive* about each tool and each project rather than what they have in
-common, phrases that survive as phrases (`dev server`, `word cloud`), and terms
+common, phrases that survive as phrases (`dev server`, `word cloud` — two words
+with a space between them, never a JSON key and its value), and terms
 rising or fading month over month. The question it answers: **what do I actually
 ask AI to do, how has that changed, and how does it differ per tool and per
 project?**
@@ -194,12 +194,13 @@ making those choices with the facts in front of you.
   Wrapped. The page says `SHARE COPY` in its footer and on its Spend tab, so a
   recipient can tell which one they were given.
 - **What `--scrub` does not do is read your mind.** The clouds it keeps are
-  still your own prose, so an unreleased codename you typed all year is still an
-  unreleased codename you typed all year — the scrub removes strings harvested
+  still your own prose, so an unreleased codename that ran through your prompts
+  all year is still an unreleased codename that ran through your prompts all
+  year — the scrub removes strings harvested
   from your machine, not vocabulary. Its identifier rule is a rule about the
   dot and nothing else: `buildbox.internal` goes, `buildbox` stays, and so do
   `acmecorp-prod-eu` and `macbookpro18`, because on the page nothing separates
-  them from a word you typed. Widening the rule would cost real vocabulary;
+  them from an ordinary word. Widening the rule would cost real vocabulary;
   `--redact` is the answer for a name you know about. The tool half of an MCP
   call is kept too, and a distinctive one still implies its server. Read the
   page before you send it.
@@ -241,9 +242,9 @@ making those choices with the facts in front of you.
   entirely.
 - **The Wrapped card carries no directory names and no file paths** — that rule
   is enforced in `wcstats/wrapped.py`, not in the page, so it holds for anything
-  built from `stats.json`. **The words on it are a different matter: they are
-  yours**, straight out of your own prompts, and a product codename you typed all
-  year can land at the top of the list. **The card also prints one dollar
+  built from `stats.json`. **The words on it are a different matter: they come
+  straight out of your own prompts**, and a product codename that ran through
+  them all year can land at the top of the list. **The card also prints one dollar
   figure: your estimated spend for the whole year.** It is a list-price estimate
   rather than a bill, but it is still a number about you, in an image people
   post publicly. Read the card before posting it, and tap any word to drop it —
@@ -253,10 +254,20 @@ making those choices with the facts in front of you.
   has a Download button, but a screenshot of any slide works just as well, and
   the slides carry more than the card does: your spend total and the date of
   your priciest day, the date of your busiest day, your peak hour and weekday,
-  and how many times you said please, thanks and sorry.
+  and how many times *please*, *thanks* and *sorry* appeared in your prompts.
 - Politeness counters and every word cloud run over *cleaned* prose, so a
-  "please" injected by a hook or a skill definition can never be credited to
-  you.
+  "please" injected by a hook or a skill definition is filtered out before it
+  can be counted.
+- **A prompt is whatever arrived in your turn.** That is what the tool can
+  honestly claim, and the copy is written to claim exactly that and no more.
+  Typing, pasting a stack trace, and a skill definition the harness folded into
+  your message all land in the same event, and nothing downstream can tell them
+  apart. So the page says *words sent to AI*, *your most-used words* and *it
+  came up in your prompts* — never *you typed this*. `wcstats/clean.py` throws
+  out as much machine text as shape alone can identify — injected blocks, code,
+  paths, log lines, `ls -l` rows, and JSON/YAML/TOML config regions — but it is
+  a filter, not a witness: it can tell config from prose, and it cannot tell
+  your hands from your clipboard.
 - The built page makes **no** network requests at all: no fonts, no scripts, no
   images fetched from anywhere. It renders identically on a machine that has
   never been online. That is a security property and not a privacy one — the
@@ -306,13 +317,30 @@ strips injected context (hook output, skill definitions, agent-history
 injections, CLAUDE.md echoes), fenced and unfenced code, file dumps, diffs, and
 log lines.
 
+It also strips **structured data** — JSON, YAML, TOML, schemas — and that one
+took a bug to find. A settings schema pasted into a prompt is not fenced, is not
+markup, and arrives *inside* a user turn, so nothing else in the pipeline could
+see it: the shipped card announced `type string` as the owner's signature
+phrase, 435 times, out of `"type": "string"`. The filter works on **regions**
+rather than whole messages, because the real shape in the corpus is a typed
+question followed by a pasted blob and throwing away the message throws away the
+question. Exactly one line shape is decisive on its own — a quoted identifier
+key before a colon — and the ambiguous ones (`key: value`, a lone quoted value,
+a closing brace) only go when they sit inside a run that has something decisive
+in it. `Note: read this first` is prose, and stays prose even when the line
+under it is a schema.
+
 Scoring goes past raw counts:
 
 - **Frequency** for the headline cloud.
 - **Log-odds with an informative Dirichlet prior** for every comparison facet.
   Raw counts make each tool and project look identical; this surfaces what is
   *distinctive* about one against the whole corpus.
-- **PMI collocations**, so `dev server` and `word cloud` survive as phrases.
+- **PMI collocations**, so `dev server` and `word cloud` survive as phrases. A
+  candidate pair has to have been *adjacent, with a space between the words* —
+  the same bug that produced `type string` produced it by bridging the `": "`
+  between a JSON key and its value, and a phrase that spans a colon is not a
+  phrase anyone said.
 - **Month-over-month rate deltas** for rising and fading terms.
 
 Near-identical automation prompts are clustered by shingle key and counted once

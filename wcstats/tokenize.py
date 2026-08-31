@@ -291,16 +291,50 @@ def raw_tokens(text: str):
             for m in RE_TOKEN.finditer(_fold(text))]
 
 
-def bigrams(toks):
-    return zip(toks, toks[1:])
+# What may sit between the two halves of a phrase: a space, and nothing else.
+# This is the whole rule, and it is worth stating plainly because the old one
+# was "whatever was between them, we don't look". phrase_candidates() used to
+# run over a flat token list, which had already thrown away every separator, so
+# a bigram formed across ANY gap: a newline, a comma, a bullet -- and, the one
+# that reached the share card, the `": "` between a JSON key and its value.
+# `"type": "string"` became the phrase `type string` 435 times and was
+# announced to the owner as the phrase he typed often enough that it became a
+# tell. A phrase spanning a colon-quote boundary is not a phrase anyone said.
+#
+# Space-only is stricter than it needs to be for that one bug and that is the
+# point: it is a rule a reader can check ("two words with a space between
+# them"), where a blocklist of forbidden punctuation is a rule that is wrong
+# again the next time a serialization format shows up. It costs nothing --
+# unigrams, word counts and every other statistic are untouched, since this
+# only decides which PAIRS are offered to the PMI scorer.
+# ...spelled out rather than typed: a literal no-break space inside a
+# character class is invisible in a diff and indistinguishable from the plain
+# one beside it. It is in the set because a no-break space IS a space -- word
+# processors and some IMEs emit one between two ordinary words.
+RE_PHRASE_GAP = re.compile("[ \\t\\u00a0]+")
 
 
-def phrase_candidates(toks):
-    """Bigrams whose parts are both content words."""
+def phrase_candidates(text: str):
+    """Bigrams of content words that were adjacent, separated by a space.
+
+    Takes TEXT rather than tokens: the separator is the signal, and a token
+    list no longer has it.
+    """
+    if not text:
+        return []
+    # Folded once, and the offsets are read off the SAME string: NFC can change
+    # the length of the text, so slicing the original with folded spans would
+    # look at the wrong characters.
+    folded = _fold(text)
     out = []
-    for a, b in bigrams(toks):
-        if keep(a) and keep(b):
-            out.append(f"{a} {b}")
+    prev, prev_end = None, 0
+    for m in RE_TOKEN.finditer(folded):
+        tok = m.group(0).lower().strip("-.'")
+        if (prev and tok
+                and RE_PHRASE_GAP.fullmatch(folded[prev_end:m.start()])
+                and keep(prev) and keep(tok)):
+            out.append(f"{prev} {tok}")
+        prev, prev_end = tok, m.end()
     return out
 
 

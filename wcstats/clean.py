@@ -213,6 +213,176 @@ def looks_like_code(text: str) -> bool:
     return codey / len(lines) > 0.35
 
 
+# --- structured data: JSON, YAML, TOML, schemas -------------------------------
+#
+# The hole this closes was the loudest bug the product had. A JSON object with
+# quoted keys is not fenced, is not markup, and is not dense enough in
+# RE_CODE_LINE terms to trip looks_like_code(), so a settings schema pasted into
+# a prompt sailed through as prose -- and because it arrives INSIDE a user turn
+# (a skill definition or a tool schema injected into the message), no role gate
+# could catch it either. The shipped card told the owner his signature phrase
+# was "type string": JSON Schema, 435 times, from lines like
+#
+#     "description": "Path to a script that outputs authentication values",
+#     "type": "string"
+#
+# Two things make this filter different from every other rule in the file.
+#
+# FIRST, it is REGIONAL rather than per-line. The corpus has these embedded
+# mid-message -- a real typed question, then a pasted schema -- so throwing the
+# whole message away would throw away the question. Each line is judged, the
+# structured ones go, and the prose around them stays.
+#
+# SECOND, it grades its evidence, in three tiers rather than two, because the
+# shapes differ enormously in how much they prove.
+#
+#   STRONG    a QUOTED IDENTIFIER KEY followed by a colon, or a `[section]`
+#             header. Decisive on its own: nothing a person writes looks like
+#             `"type":`, and the whole corpus holds two lone `[bracket]` lines.
+#   GLUE      brackets, a lone quoted enum member, a `---` fence, and a
+#             `key: value` whose VALUE is a single unbroken token
+#             (`line-length = 88`, `name: update-config`, `target: "py39"`).
+#             Meaningless outside a block, so removed whenever the run they sit
+#             in has something decisive in it.
+#   AMBIGUOUS `key:` with nothing after it, or with a value of several words.
+#             This is YAML -- and it is also how this owner writes. Of the 474
+#             bare `Key: value` lines in his prompts, the runs of three or more
+#             read "Deliverable: ... / TDD: ... / Run: ..." and
+#             "Fix: ... / METHOD: ... / TESTS: ..." -- 595 tokens of the most
+#             characteristic writing he does, and `Examples:` and `METHOD:` are
+#             section headings, not YAML mappings. So an ambiguous line is only
+#             removed where it is demonstrably INSIDE a block: bracketed by
+#             unambiguous structure on both sides. At the edge of a region,
+#             where prose meets config, it is kept -- "Note: read this first"
+#             sitting directly above a pasted schema is prose, and stays.
+#
+# The strong key must be IDENTIFIER-shaped -- bounded, no spaces -- and that
+# bound is load-bearing rather than cosmetic. The owner's Arabic vocabulary
+# lives inside translation files whose keys are whole English sentences:
+#
+#     "When the chart turns red": "عندما يتحول الرسم البياني إلى اللون الأحمر",
+#
+# A rule that took any quoted key would have doubled its yield (18.5% of prompt
+# tokens instead of 9.1%) by eating the one thing on the card that was most
+# unmistakably his.
+
+# `"type":`  ·  `{"winner": "A|B|tie"}`  ·  `"$schema":`  ·  `, "path": "x"`
+RE_JSON_KEY = re.compile(r"""^[\s\[{,]*["'][A-Za-z_$@][\w.\-$]{0,39}["']\s*:""")
+
+# Structure with no claim of its own: brackets, separators, a lone scalar or
+# quoted enum member, an INI/TOML section header.
+RE_STRUCT_PUNCT = re.compile(r"^[\[\]{}(),;:]+$")
+RE_STRUCT_SCALAR = re.compile(
+    r"""^(?:["'][^"']{0,80}["']|true|false|null|-?\d[\d.eE+\-]*)\s*,?$""", re.I)
+# `[tool.black]`, `[mcp_servers.pixellab]` -- and, in the whole 224k-event
+# corpus, exactly `[Intro]` and `[Tag]`, two lyric-sheet markers worth 3 tokens.
+RE_INI_SECTION = re.compile(r"^\[[\w.\-]{1,40}\]$")
+# The one thing that makes a run of YAML unambiguous: a fence around it.
+RE_FRONTMATTER = re.compile(r"^(?:-{3,}|\.{3})$")
+# `key: value`, `key:`, `- key: value`, `key = value`.
+RE_KEYVALUE = re.compile(r"^-?\s*[A-Za-z_][\w.\-]{0,40}\s*[:=]\s*(.*)$")
+# ...and the half of that which is safe: a value that is one unbroken token or
+# an opening bracket. A person writing a labelled sentence ("Note: read this
+# first", "Deliverable: add ONE action") writes several words after the colon.
+RE_SCALAR_VALUE = re.compile(r"^(?:\S+|[\[{])\s*,?$")
+
+STRUCT_BLANK = -1
+STRUCT_PROSE = 0
+STRUCT_AMBIGUOUS = 1
+STRUCT_GLUE = 2
+STRUCT_STRONG = 3
+
+# A frontmatter block is a document header, not a chapter: past this many lines
+# a pair of `---` rules is two horizontal rules with prose between them.
+FRONTMATTER_MAX_LINES = 40
+
+
+def struct_class(line: str) -> int:
+    """How much does this line prove? See the tiers above."""
+    s = (line or "").strip()
+    if not s:
+        return STRUCT_BLANK
+    if RE_JSON_KEY.match(s) or RE_INI_SECTION.match(s):
+        return STRUCT_STRONG
+    if (RE_STRUCT_PUNCT.match(s) or RE_STRUCT_SCALAR.match(s)
+            or RE_FRONTMATTER.match(s)):
+        return STRUCT_GLUE
+    m = RE_KEYVALUE.match(s)
+    if m:
+        val = m.group(1).strip()
+        return STRUCT_GLUE if val and RE_SCALAR_VALUE.match(val) \
+            else STRUCT_AMBIGUOUS
+    return STRUCT_PROSE
+
+
+def _frontmatter_spans(lines):
+    """Line indices covered by `---` fenced YAML headers.
+
+    The fence is what licenses the YAML rule: `name: x` inside one is a field,
+    while the same line loose in a message is a sentence. An opening fence has
+    to actually open something -- the top of the message, or a blank line
+    before it -- so a `---` horizontal rule mid-paragraph cannot start one.
+    """
+    dead = set()
+    for i, ln in enumerate(lines):
+        if not RE_FRONTMATTER.match(ln.strip()):
+            continue
+        if i in dead:
+            continue
+        if i and lines[i - 1].strip():
+            continue
+        for j in range(i + 1, min(len(lines), i + FRONTMATTER_MAX_LINES + 1)):
+            body = lines[j].strip()
+            if RE_FRONTMATTER.match(body):
+                inner = [lines[k] for k in range(i + 1, j)]
+                if inner and all(struct_class(x) != STRUCT_PROSE for x in inner) \
+                        and any(RE_KEYVALUE.match(x.strip()) for x in inner):
+                    dead.update(range(i, j + 1))
+                break
+            if struct_class(body) == STRUCT_PROSE:
+                break
+    return dead
+
+
+def _absorb(run, classes):
+    """Which lines of one structured run actually go.
+
+    The run is a maximal stretch of non-prose lines that holds at least one
+    STRONG line. Everything decisive or meaningless goes with it. An AMBIGUOUS
+    line goes only when unambiguous structure stands on BOTH sides of it inside
+    the run -- that is what "inside the block" means, and it is what keeps
+    "Note: read this first" alive when it is the line directly above a pasted
+    schema. Blank lines ride along; they carry nothing either way.
+    """
+    hard = [i for i in run if classes[i] in (STRUCT_STRONG, STRUCT_GLUE)]
+    if not hard:
+        return ()
+    lo, hi = hard[0], hard[-1]
+    return [i for i in run
+            if classes[i] != STRUCT_AMBIGUOUS or lo < i < hi]
+
+
+def drop_structured_lines(lines):
+    """Drop the config/schema regions of a message, keep the prose around them.
+
+    A run is an unbroken stretch of non-prose lines; it is structured when
+    something decisive is in it. Blank lines neither start a run nor break one,
+    so a schema with an empty line in the middle is still one region.
+    """
+    classes = [struct_class(ln) for ln in lines]
+    dead = _frontmatter_spans(lines)
+    run, strong = [], False
+    for i, c in enumerate(classes + [STRUCT_PROSE]):
+        if c == STRUCT_PROSE:
+            if strong:
+                dead.update(_absorb(run, classes))
+            run, strong = [], False
+            continue
+        run.append(i)
+        strong = strong or c == STRUCT_STRONG
+    return [ln for i, ln in enumerate(lines) if i not in dead]
+
+
 def _drop_line(line: str) -> bool:
     s = line.strip()
     if not s:
@@ -251,7 +421,10 @@ def clean_prose(text: str) -> str:
     t = RE_ANSI.sub(" ", text)
     for pat in BLOCK_PATTERNS:
         t = pat.sub(" ", t)
-    lines = [ln for ln in t.splitlines() if not _drop_line(ln)]
+    # Regions first, then lines: drop_structured_lines() needs to see a schema
+    # block whole, and _drop_line() would have already punched holes in it.
+    lines = [ln for ln in drop_structured_lines(t.splitlines())
+             if not _drop_line(ln)]
     t = "\n".join(lines)
     t = RE_URL.sub(" ", t)
     t = RE_EMAIL.sub(" ", t)
